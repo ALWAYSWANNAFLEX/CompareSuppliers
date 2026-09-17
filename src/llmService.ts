@@ -23,19 +23,22 @@ export interface ProviderConfig {
 
 export const PROVIDERS: ProviderConfig[] = [
   {
-    id: 'groq',
-    name: 'Groq',
-    description: 'Сверхбыстрый, полностью бесплатный',
+    id: 'openrouter',
+    name: 'OpenRouter',
+    description: 'Бесплатные модели, без карты',
     free: true,
-    freeDetails: 'Бесплатно, есть лимиты на запросы в минуту',
-    apiKeyUrl: 'https://console.groq.com/keys',
-    baseUrl: 'https://api.groq.com/openai/v1',
+    freeDetails: 'Полностью бесплатно, без кредитной карты',
+    apiKeyUrl: 'https://openrouter.ai/keys',
+    baseUrl: 'https://openrouter.ai/api/v1',
     models: [
-      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', note: 'Рекомендуется' },
-      { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B', note: 'Самый быстрый' },
-      { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
+      { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', name: 'Nemotron 3 Ultra 550B', note: 'Топ бесплатная' },
+      { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B', note: 'Быстрая' },
+      { id: 'nvidia/nemotron-3.5-lightning:free', name: 'Nemotron 3.5 Lightning', note: 'Самая быстрая' },
+      { id: 'openrouter/free', name: 'Auto (любая бесплатная)', note: 'Роутер' },
+      { id: 'cohere/north-mini-code:free', name: 'Cohere North Mini Code' },
+      { id: 'thinkingmachines/inkling-small:free', name: 'Inkling Small' },
     ],
-    defaultModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'nvidia/nemotron-3-ultra-550b-a55b:free',
   },
   {
     id: 'gemini',
@@ -53,21 +56,19 @@ export const PROVIDERS: ProviderConfig[] = [
     defaultModel: 'gemini-2.0-flash',
   },
   {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    description: 'Агрегатор моделей, есть бесплатные',
-    free: true,
-    freeDetails: 'Многие модели бесплатны (с пометкой :free)',
-    apiKeyUrl: 'https://openrouter.ai/keys',
-    baseUrl: 'https://openrouter.ai/api/v1',
+    id: 'groq',
+    name: 'Groq',
+    description: 'Сверхбыстрый inference',
+    free: false,
+    freeDetails: 'Платный: $0.075-0.80 за 1M токенов',
+    apiKeyUrl: 'https://console.groq.com/keys',
+    baseUrl: 'https://api.groq.com/openai/v1',
     models: [
-      { id: 'deepseek/deepseek-chat-v3-0324:free', name: 'DeepSeek V3 (Free)', note: 'Рекомендуется' },
-      { id: 'qwen/qwen3-235b-a22b:free', name: 'Qwen3 235B (Free)', note: 'Мощный' },
-      { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash (Free)' },
-      { id: 'meta-llama/llama-4-maverick:free', name: 'Llama 4 Maverick (Free)' },
-      { id: 'deepseek/deepseek-r1:free', name: 'DeepSeek R1 (Free)', note: 'Рассуждение' },
+      { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B', note: 'Самый дешёвый' },
+      { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B', note: 'Мощный' },
+      { id: 'qwen/qwen3.8-27b', name: 'Qwen3.8 27B' },
     ],
-    defaultModel: 'deepseek/deepseek-chat-v3-0324:free',
+    defaultModel: 'openai/gpt-oss-20b',
   },
   {
     id: 'deepseek',
@@ -117,9 +118,21 @@ export interface LLMSettings {
 export function getSettings(): LLMSettings {
   try {
     const saved = localStorage.getItem(SETTINGS_KEY);
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      const parsed = JSON.parse(saved) as LLMSettings;
+      // Валидация: если модель больше не существует у провайдера — сбрасываем
+      const provider = PROVIDERS.find(p => p.id === parsed.provider);
+      if (provider) {
+        const modelExists = provider.models.some(m => m.id === parsed.model);
+        if (modelExists) return parsed;
+      }
+      // Модель невалидна — сбрасываем к дефолтному провайдеру
+      const defaultProvider = PROVIDERS[0];
+      return { provider: defaultProvider.id, apiKey: parsed.apiKey || '', model: defaultProvider.defaultModel };
+    }
   } catch { /* ignore */ }
-  return { provider: 'groq', apiKey: '', model: 'llama-3.3-70b-versatile' };
+  const defaultProvider = PROVIDERS[0];
+  return { provider: defaultProvider.id, apiKey: '', model: defaultProvider.defaultModel };
 }
 
 export function saveSettings(settings: LLMSettings) {
