@@ -1,6 +1,6 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { Supplier, ProductComparison } from './types';
-import { parsePriceText, findMinPrice, exportToCSV } from './parser';
+import { parsePriceText, parseExcelFile, entriesToPlainText, findMinPrice, exportToCSV } from './parser';
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -14,6 +14,8 @@ function App() {
   const [selectedSupplierId, setSelectedSupplierId] = useState<string | null>(null);
   const [newSupplierName, setNewSupplierName] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Сохраняем в localStorage
   const saveSuppliers = useCallback((newSuppliers: Supplier[]) => {
@@ -49,6 +51,77 @@ function App() {
     saveSuppliers(updated);
   }, [suppliers, saveSuppliers]);
 
+  // Обработка загрузки файла
+  const handleFileUpload = useCallback((file: File, targetSupplierId?: string) => {
+    const targetId = targetSupplierId || selectedSupplierId;
+    if (!targetId) return;
+
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    
+    if (extension === 'xlsx' || extension === 'xls') {
+      // Excel файл
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = e.target?.result as ArrayBuffer;
+          const entries = parseExcelFile(data);
+          if (entries.length > 0) {
+            const text = entriesToPlainText(entries);
+            updatePriceText(targetId, text);
+          } else {
+            alert('Не удалось распознать данные в файле. Проверьте формат.');
+          }
+        } catch (err) {
+          console.error('Error parsing Excel:', err);
+          alert('Ошибка при чтении Excel файла.');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (extension === 'txt' || extension === 'csv') {
+      // Текстовый файл
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = e.target?.result as string;
+        updatePriceText(targetId, text);
+      };
+      reader.readAsText(file, 'utf-8');
+    } else {
+      alert('Поддерживаемые форматы: .xlsx, .xls, .txt, .csv');
+    }
+  }, [selectedSupplierId, updatePriceText]);
+
+  // Drag & Drop
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0 && selectedSupplierId) {
+      handleFileUpload(files[0], selectedSupplierId);
+    }
+  }, [selectedSupplierId, handleFileUpload]);
+
+  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0 && selectedSupplierId) {
+      handleFileUpload(files[0], selectedSupplierId);
+    }
+    // Сбрасываем input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [selectedSupplierId, handleFileUpload]);
+
   const selectedSupplier = useMemo(() => 
     suppliers.find(s => s.id === selectedSupplierId), 
     [suppliers, selectedSupplierId]
@@ -58,7 +131,6 @@ function App() {
   const comparisonData = useMemo<ProductComparison[]>(() => {
     if (suppliers.length === 0) return [];
 
-    // Собираем все уникальные наименования товаров
     const allProducts = new Map<string, ProductComparison>();
 
     for (const supplier of suppliers) {
@@ -227,20 +299,77 @@ function App() {
               </div>
               <h3 className="text-lg font-semibold text-gray-700 mb-2">Начните работу</h3>
               <p className="text-gray-500 max-w-md">
-                Добавьте поставщиков в левой панели, затем вставьте их прайс-листы в текстовом формате.
+                Добавьте поставщиков в левой панели, затем загрузите их прайс-листы в формате Excel (.xlsx, .xls) или вставьте текстовый прайс.
                 Система автоматически сравнит цены и выделит лучшие предложения.
               </p>
-              <div className="mt-6 p-4 bg-gray-50 rounded-lg text-left max-w-md">
-                <p className="text-xs font-semibold text-gray-600 mb-2">Пример формата прайса:</p>
-                <code className="text-xs text-gray-700 leading-relaxed block">
-                  Товар А - 1500<br/>
-                  Товар Б - 2300<br/>
-                  Товар В - 890
-                </code>
+              <div className="mt-6 p-4 bg-gray-50 rounded-lg text-left max-w-md space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-gray-600 mb-1">Поддерживаемые форматы:</p>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.xlsx</span>
+                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.xls</span>
+                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.txt</span>
+                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.csv</span>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-600 mb-1">Пример текстового формата:</p>
+                  <code className="text-xs text-gray-700 leading-relaxed block">
+                    Товар А - 1500<br/>
+                    Товар Б - 2300<br/>
+                    Товар В - 890
+                  </code>
+                </div>
               </div>
             </div>
           ) : selectedSupplier ? (
             <div className="space-y-6">
+              {/* File upload zone */}
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`bg-white rounded-xl shadow-sm border-2 border-dashed transition-all overflow-hidden ${
+                  isDragOver
+                    ? 'border-blue-400 bg-blue-50 scale-[1.01]'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className="p-6 flex flex-col items-center justify-center text-center">
+                  <div className={`w-14 h-14 rounded-full flex items-center justify-center mb-3 transition-colors ${
+                    isDragOver ? 'bg-blue-100' : 'bg-gray-100'
+                  }`}>
+                    <svg className={`w-7 h-7 ${isDragOver ? 'text-blue-500' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                  </div>
+                  <p className="text-sm font-medium text-gray-700 mb-1">
+                    {isDragOver ? 'Отпустите файл для загрузки' : 'Перетащите файл сюда'}
+                  </p>
+                  <p className="text-xs text-gray-500 mb-3">
+                    или выберите файл вручную
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-4 py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
+                    >
+                      Выбрать файл
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls,.txt,.csv"
+                      onChange={handleFileInputChange}
+                      className="hidden"
+                    />
+                    <span className="text-xs text-gray-400">
+                      .xlsx, .xls, .txt, .csv
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Price input area */}
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
@@ -250,15 +379,17 @@ function App() {
                       {selectedSupplierEntries.length} позиций
                     </span>
                   </div>
-                  <span className="text-xs text-gray-500">
-                    Формат: Наименование - Цена
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">
+                      Или вставьте текст:
+                    </span>
+                  </div>
                 </div>
                 <textarea
                   value={selectedSupplier.priceText}
                   onChange={(e) => updatePriceText(selectedSupplier.id, e.target.value)}
                   placeholder={"Вставьте прайс-лист поставщика...\n\nПример:\nЯблоко Гала 1кг - 150\nБанан Эквадор 1кг - 89\nАпельсин Марокко 1кг - 120"}
-                  className="w-full h-64 px-5 py-4 text-sm font-mono text-gray-800 resize-none focus:outline-none placeholder:text-gray-400"
+                  className="w-full h-48 px-5 py-4 text-sm font-mono text-gray-800 resize-none focus:outline-none placeholder:text-gray-400"
                 />
               </div>
 
@@ -268,13 +399,13 @@ function App() {
                   <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
                     <h3 className="font-semibold text-gray-800">Распознанные позиции</h3>
                   </div>
-                  <div className="max-h-48 overflow-y-auto">
+                  <div className="max-h-60 overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
-                          <th className="text-left px-5 py-2 text-gray-600 font-medium">№</th>
+                          <th className="text-left px-5 py-2 text-gray-600 font-medium w-12">№</th>
                           <th className="text-left px-5 py-2 text-gray-600 font-medium">Наименование</th>
-                          <th className="text-right px-5 py-2 text-gray-600 font-medium">Цена</th>
+                          <th className="text-right px-5 py-2 text-gray-600 font-medium w-32">Цена</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -388,7 +519,13 @@ function App() {
       <footer className="bg-white border-t border-gray-200 px-4 py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-between text-xs text-gray-500">
           <p>Данные сохраняются локально в браузере</p>
-          <p>Формат прайса: <code className="bg-gray-100 px-1.5 py-0.5 rounded">Наименование - Цена</code></p>
+          <div className="flex items-center gap-2">
+            <span>Форматы:</span>
+            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.xlsx</span>
+            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.xls</span>
+            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.txt</span>
+            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.csv</span>
+          </div>
         </div>
       </footer>
     </div>
