@@ -28,6 +28,7 @@ function App() {
   const [settings, setSettingsState] = useState(getSettings());
   const [isNormalizing, setIsNormalizing] = useState(false);
   const [normalizationProgress, setNormalizationProgress] = useState({ current: 0, total: 0 });
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [useLLM, setUseLLM] = useState(false);
   const [normalizedMap, setNormalizedMap] = useState<Record<string, string>>({});
   const [cacheSize, setCacheSize] = useState(getCacheSize());
@@ -185,6 +186,8 @@ function App() {
       return;
     }
 
+    const controller = new AbortController();
+    setAbortController(controller);
     setIsNormalizing(true);
     setNormalizationProgress({ current: 0, total: 0 });
 
@@ -200,7 +203,8 @@ function App() {
     // normalizeNamesBatch НИКОГДА не выбрасывает — всегда возвращает частичный результат
     const { map, stats } = await normalizeNamesBatch(
       namesArray,
-      (current: number, total: number) => setNormalizationProgress({ current, total })
+      (current: number, total: number) => setNormalizationProgress({ current, total }),
+      controller.signal
     );
 
     const newMap: Record<string, string> = {};
@@ -213,7 +217,10 @@ function App() {
     setCacheSize(getCacheSize());
     setLastStats(stats);
 
-    if (stats.failed > 0 && stats.normalized === 0) {
+    // Проверяем была ли отмена
+    if (controller.signal.aborted) {
+      showMessage('success', `⏹ Отменено. Нормализовано ${stats.normalized} из ${stats.total}`);
+    } else if (stats.failed > 0 && stats.normalized === 0) {
       showMessage('error', `Не удалось нормализовать. Проверьте API ключ и попробуйте другой провайдер.`);
     } else if (stats.failed > 0) {
       showMessage('success', `✓ ${stats.normalized} нормализовано, ${stats.failed} не удалось (rate limit)`);
@@ -222,7 +229,15 @@ function App() {
     }
 
     setIsNormalizing(false);
+    setAbortController(null);
   }, [settings.apiKey, suppliers, normalizedMap, showMessage]);
+
+  // Отмена нормализации
+  const handleCancelNormalization = useCallback(() => {
+    if (abortController) {
+      abortController.abort();
+    }
+  }, [abortController]);
 
   const handleSaveSettings = useCallback((newSettings: typeof settings) => {
     saveSettings(newSettings);
@@ -554,12 +569,23 @@ function App() {
               {/* Progress */}
               {isNormalizing && (
                 <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
-                  <div className="flex items-center gap-3 mb-2">
-                    <svg className="w-5 h-5 text-purple-600 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                    </svg>
-                    <span className="text-sm font-medium text-purple-800">Нормализация через {currentProvider.name}...</span>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <svg className="w-5 h-5 text-purple-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                      </svg>
+                      <span className="text-sm font-medium text-purple-800">Нормализация через {currentProvider.name}...</span>
+                    </div>
+                    <button
+                      onClick={handleCancelNormalization}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Отменить
+                    </button>
                   </div>
                   <div className="w-full bg-purple-200 rounded-full h-2">
                     <div className="bg-purple-600 h-2 rounded-full transition-all duration-300"
