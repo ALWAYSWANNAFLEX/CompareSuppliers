@@ -91,15 +91,19 @@ const SYSTEM_PROMPT = `Ты — эксперт по стандартизации
 Твоя задача — привести название товара к единому стандартному формату.
 
 Формат вывода:
-[Бренд] [Модель] [ОЗУ]/[Встроенная память] [Цвет]
+[Бренд] [Модель] [ОЗУ]/[Встроенная память] [Цвет] [Код региона]
 
 Правила:
-1. Бренд — латиницей как официально (Samsung, Apple, Xiaomi, Realme, Poco и т.д.)
-2. Модель — как в официальном каталоге (Galaxy A17, iPhone 15 Pro, Redmi Note 13 и т.д.)
-3. ОЗУ и встроенная память — числом через слэш (4/128, 8/256). Если встроенная память не указана — пиши только ОЗУ.
-4. Цвет — ОСТАВЬ КАК ЕСТЬ (латиницей), не переводи (Gray, Black, Natural Titanium и т.д.)
-5. Разделитель: пробел между блоками, слэш только между ОЗУ и памятью
-6. Убери мусор: внутренние артикулы (SM-A175F, M2101K7AI и т.п.), слова "новый", "оригинал", "global version" и т.п.
+1. Бренд — латиницей как официально (Samsung, Apple, Xiaomi, Realme, Poco, Google и т.д.)
+2. Модель — как в официальном каталоге (Galaxy A17, iPhone 15 Pro, Pixel 11 Pro XL и т.д.)
+3. ОЗУ и встроенная память — числом через слэш (4/128, 8/256, 12/256). Если встроенная память не указана — пиши только ОЗУ.
+4. Цвет — ОСТАВЬ КАК ЕСТЬ (латиницей), не переводи (Gray, Black, Canyon, Natural Titanium и т.д.)
+5. Код региона — ОБЯЗАТЕЛЬНО последний параметр, если регион указан в исходном названии. Формат: 2 буквы латиницей (CA, EU, RU, US, SEA, EAC, IN и т.д.).
+6. Конвертация эмодзи флагов в коды регионов: 🇨🇦→CA, 🇺🇸→US, 🇷🇺→RU, 🇪🇺→EU, 🇮🇳→IN, 🇩🇪→DE, 🇬🇧→GB, 🇯🇵→JP, 🇰🇷→KR, 🇨🇳→CN и т.д.
+7. Разделитель: пробел между блоками, слэш только между ОЗУ и памятью.
+8. Убери мусор: внутренние артикулы (SM-A175F, M2101K7AI и т.п.), слова "новый", "оригинал", "global version" и т.п.
+9. ВАЖНО для смартфонов/телефонов: ОЗУ должно быть указано ОБЯЗАТЕЛЬНО. Если в исходном названии ОЗУ не указано, определи его по официальным характеристикам этой модели (ты знаешь спецификации популярных смартфонов). Например: Google Pixel 11 Pro XL всегда имеет 12 ГБ ОЗУ, iPhone 15 Pro Max — 8 ГБ, Samsung Galaxy S24 Ultra — 12 ГБ и т.д.
+10. Если регион не указан в исходном названии — не добавляй его.
 
 Примеры:
 - "Samsung-A17-4/128-Gray" → "Samsung Galaxy A17 4/128 Gray"
@@ -109,7 +113,11 @@ const SYSTEM_PROMPT = `Ты — эксперт по стандартизации
 - "Xiaomi Redmi Note 13 8/256 Midnight Black" → "Xiaomi Redmi Note 13 8/256 Midnight Black"
 - "Realme C55 6/128 Sunshower" → "Realme C55 6/128 Sunshower"
 - "Poco X6 Pro 8/256" → "Poco X6 Pro 8/256"
-- "Samsung A15 4/64 Blue" → "Samsung Galaxy A15 4/64 Blue"`;
+- "Samsung A15 4/64 Blue" → "Samsung Galaxy A15 4/64 Blue"
+- "Google Pixel 11 Pro XL 256 Fog🇨🇦" → "Google Pixel 11 Pro XL 12/256 Fog CA"
+- "Pixel-11-Pro-XL-12/256-Canyon-ca" → "Google Pixel 11 Pro XL 12/256 Canyon CA"
+- "Samsung Galaxy S24 Ultra 512 Titanium Black EU" → "Samsung Galaxy S24 Ultra 12/512 Titanium Black EU"
+- "iPhone 16 Pro 256 Desert🇷🇺" → "Apple iPhone 16 Pro 8/256 Desert Titanium RU"`;
 
 // ============================================================
 //  API CALLS
@@ -188,7 +196,7 @@ async function normalizeBatch(
   signal?: AbortSignal
 ): Promise<string[]> {
   const numbered = names.map((n, i) => `${i + 1}. ${n}`).join('\n');
-  const userMessage = `Нормализуй следующие названия товаров. Верни ТОЛЬКО JSON массив нормализованных названий в том же порядке, без пояснений. Пример ответа: ["Samsung Galaxy A17 4/128 Gray", "Apple iPhone 15 8/128 Black"]\n\nНазвания:\n${numbered}`;
+  const userMessage = `Нормализуй следующие названия товаров. Верни ТОЛЬКО JSON массив нормализованных названий в том же порядке, без пояснений. Пример ответа: ["Samsung Galaxy A17 4/128 Gray", "Google Pixel 11 Pro XL 12/256 Fog CA"]\n\nНазвания:\n${numbered}`;
 
   const content = await callNordRouter(
     apiKey,
