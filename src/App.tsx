@@ -37,7 +37,13 @@ function App() {
   useEffect(() => {
     const saved = localStorage.getItem('normalized_map');
     if (saved) {
-      try { setNormalizedMap(JSON.parse(saved)); } catch { /* ignore */ }
+      try {
+        const parsed = JSON.parse(saved);
+        if (Object.keys(parsed).length > 0) {
+          setNormalizedMap(parsed);
+          setUseLLM(true); // Автоматически включаем LLM если есть данные
+        }
+      } catch { /* ignore */ }
     }
   }, []);
 
