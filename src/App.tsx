@@ -661,7 +661,7 @@ function App() {
 
       <footer className="bg-white border-t border-gray-200 px-4 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <p>Данные локально • LLM через <a href="https://nordrouter.com" target="_blank" rel="noopener" className="text-purple-600 hover:underline">NordRouter</a></p>
+          <p>Данные локально • LLM через <a href="https://nordrouter.net" target="_blank" rel="noopener" className="text-purple-600 hover:underline">NordRouter</a></p>
           <p>Excel • TXT • CSV</p>
         </div>
       </footer>
@@ -693,7 +693,7 @@ function SettingsPanel({ settings, onSave, onClearCache, cacheSize }: {
               placeholder="sk-nr-..."
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
             <p className="text-xs text-gray-500 mt-1">
-              Получить: <a href="https://nordrouter.com/dashboard/" target="_blank" rel="noopener" className="text-purple-600 hover:underline">nordrouter.com/dashboard</a>
+              Получить: <a href="https://nordrouter.net/dashboard/" target="_blank" rel="noopener" className="text-purple-600 hover:underline">nordrouter.net/dashboard</a>
             </p>
           </div>
 
