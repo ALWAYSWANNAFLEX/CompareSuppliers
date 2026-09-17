@@ -3,6 +3,8 @@
  * NordRouter — OpenAI-совместимый API роутер (nordrouter.net)
  */
 
+import { cacheGetBatch, cachePutBatch, cacheSize, cacheClear } from './db';
+
 // ============================================================
 //  КОНФИГУРАЦИЯ NORDROUTER
 // ============================================================
@@ -27,10 +29,9 @@ export const MODELS: ModelOption[] = [
 export const DEFAULT_MODEL = 'deepseek/deepseek-v4-pro';
 
 // ============================================================
-//  LOCALSTORAGE
+//  НАСТРОЙКИ (localStorage — маленькие данные)
 // ============================================================
 
-const CACHE_KEY = 'normalization_cache';
 const SETTINGS_KEY = 'llm_settings';
 
 export interface LLMSettings {
@@ -62,25 +63,16 @@ export function saveSettings(settings: LLMSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
-function getCache(): Record<string, string> {
-  try {
-    const cached = localStorage.getItem(CACHE_KEY);
-    return cached ? JSON.parse(cached) : {};
-  } catch {
-    return {};
-  }
+// ============================================================
+//  КЭШ (IndexedDB — большие данные)
+// ============================================================
+
+export async function clearNormalizationCache(): Promise<void> {
+  return cacheClear();
 }
 
-function setCache(cache: Record<string, string>) {
-  localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-}
-
-export function clearNormalizationCache() {
-  localStorage.removeItem(CACHE_KEY);
-}
-
-export function getCacheSize(): number {
-  return Object.keys(getCache()).length;
+export async function getCacheSize(): Promise<number> {
+  return cacheSize();
 }
 
 // ============================================================
@@ -242,6 +234,7 @@ export interface NormalizationResult {
 /**
  * Главная функция: нормализует все названия.
  * НИКОГДА не выбрасывает ошибку — всегда возвращает частичный результат.
+ * Кэш хранится в IndexedDB.
  */
 export async function normalizeNamesBatch(
   names: string[],
@@ -260,7 +253,9 @@ export async function normalizeNamesBatch(
     return { map: results, stats };
   }
 
-  const cache = getCache();
+  // Загружаем кэш из IndexedDB (массово — эффективно)
+  const cacheKeys = names.map(n => n.toLowerCase().trim());
+  const cache = await cacheGetBatch(cacheKeys);
 
   // Проверяем кэш
   const toProcess: string[] = [];
@@ -284,6 +279,8 @@ export async function normalizeNamesBatch(
 
   const BATCH_SIZE = 5;
   let consecutiveErrors = 0;
+  // Буфер для массовой записи в кэш
+  let cacheBuffer: Record<string, string> = {};
 
   for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
     if (signal?.aborted) break;
@@ -306,12 +303,11 @@ export async function normalizeNamesBatch(
         const original = batch[j];
         const normalized = batchResults[j] || original;
         results.set(original, normalized);
-        cache[original.toLowerCase().trim()] = normalized;
+        cacheBuffer[original.toLowerCase().trim()] = normalized;
         if (normalized.toLowerCase().trim() !== original.toLowerCase().trim()) {
           stats.normalized++;
         }
       }
-      setCache(cache);
       batchOk = true;
       consecutiveErrors = 0;
     } catch {
@@ -328,7 +324,7 @@ export async function normalizeNamesBatch(
           );
           const cleaned = result.replace(/^["']+|["']+$/g, '').trim();
           results.set(name, cleaned || name);
-          cache[name.toLowerCase().trim()] = cleaned || name;
+          cacheBuffer[name.toLowerCase().trim()] = cleaned || name;
           if (cleaned && cleaned.toLowerCase().trim() !== name.toLowerCase().trim()) {
             stats.normalized++;
           }
@@ -338,7 +334,12 @@ export async function normalizeNamesBatch(
           stats.failed++;
         }
       }
-      setCache(cache);
+    }
+
+    // Записываем буфер в IndexedDB после каждого батча
+    if (Object.keys(cacheBuffer).length > 0) {
+      await cachePutBatch(cacheBuffer);
+      cacheBuffer = {};
     }
 
     if (!batchOk) consecutiveErrors++;

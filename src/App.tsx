@@ -6,6 +6,7 @@ import {
   normalizeNamesBatch, clearNormalizationCache, getCacheSize,
   NormalizationStats, LLMSettings
 } from './llmService';
+import { mapGetAll, mapSetAll, mapClear, migrateFromLocalStorage } from './db';
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -31,20 +32,25 @@ function App() {
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [useLLM, setUseLLM] = useState(false);
   const [normalizedMap, setNormalizedMap] = useState<Record<string, string>>({});
-  const [cacheSize, setCacheSize] = useState(getCacheSize());
+  const [cacheSize, setCacheSize] = useState(0);
   const [lastStats, setLastStats] = useState<NormalizationStats | null>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('normalized_map');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Object.keys(parsed).length > 0) {
-          setNormalizedMap(parsed);
-          setUseLLM(true); // Автоматически включаем LLM если есть данные
-        }
-      } catch { /* ignore */ }
-    }
+    (async () => {
+      // Миграция из localStorage в IndexedDB (однократно)
+      await migrateFromLocalStorage();
+      
+      // Загрузка карты нормализации из IndexedDB
+      const map = await mapGetAll();
+      if (Object.keys(map).length > 0) {
+        setNormalizedMap(map);
+        setUseLLM(true);
+      }
+      
+      // Загрузка размера кэша
+      const size = await getCacheSize();
+      setCacheSize(size);
+    })();
   }, []);
 
   const saveSuppliers = useCallback((newSuppliers: Supplier[]) => {
@@ -213,9 +219,9 @@ function App() {
     
     const mergedMap = { ...normalizedMap, ...newMap };
     setNormalizedMap(mergedMap);
-    localStorage.setItem('normalized_map', JSON.stringify(mergedMap));
+    await mapSetAll(mergedMap);
     setUseLLM(true);
-    setCacheSize(getCacheSize());
+    setCacheSize(await getCacheSize());
     setLastStats(stats);
 
     if (controller.signal.aborted) {
@@ -236,20 +242,21 @@ function App() {
     if (abortController) abortController.abort();
   }, [abortController]);
 
-  const handleSaveSettings = useCallback((newSettings: LLMSettings) => {
+  const handleSaveSettings = useCallback(async (newSettings: LLMSettings) => {
     saveSettings(newSettings);
     setSettingsState(newSettings);
-    setCacheSize(getCacheSize());
+    setCacheSize(await getCacheSize());
     setShowSettings(false);
     showMessage('success', 'Настройки сохранены');
   }, [showMessage]);
 
-  const handleClearCache = useCallback(() => {
-    if (confirm('Очистить кэш нормализации?')) {
-      clearNormalizationCache();
+  const handleClearCache = useCallback(async () => {
+    if (confirm('Очистить кэш нормализации и карту нормализации?')) {
+      await clearNormalizationCache();
+      await mapClear();
       setNormalizedMap({});
-      localStorage.removeItem('normalized_map');
-      setCacheSize(0);
+      setCacheSize(await getCacheSize());
+      setUseLLM(false);
       showMessage('success', 'Кэш очищен');
     }
   }, [showMessage]);
