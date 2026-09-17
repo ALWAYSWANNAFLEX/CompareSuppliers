@@ -15,9 +15,9 @@ function App() {
   const [newSupplierName, setNewSupplierName] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Сохраняем в localStorage
   const saveSuppliers = useCallback((newSuppliers: Supplier[]) => {
     setSuppliers(newSuppliers);
     localStorage.setItem('suppliers', JSON.stringify(newSuppliers));
@@ -51,15 +51,22 @@ function App() {
     saveSuppliers(updated);
   }, [suppliers, saveSuppliers]);
 
+  const showMessage = useCallback((type: 'success' | 'error', text: string) => {
+    setUploadMessage({ type, text });
+    setTimeout(() => setUploadMessage(null), 4000);
+  }, []);
+
   // Обработка загрузки файла
   const handleFileUpload = useCallback((file: File, targetSupplierId?: string) => {
     const targetId = targetSupplierId || selectedSupplierId;
-    if (!targetId) return;
+    if (!targetId) {
+      showMessage('error', 'Сначала выберите поставщика');
+      return;
+    }
 
     const extension = file.name.split('.').pop()?.toLowerCase();
     
     if (extension === 'xlsx' || extension === 'xls') {
-      // Excel файл
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
@@ -68,29 +75,30 @@ function App() {
           if (entries.length > 0) {
             const text = entriesToPlainText(entries);
             updatePriceText(targetId, text);
+            showMessage('success', `Загружено ${entries.length} позиций из "${file.name}"`);
           } else {
-            alert('Не удалось распознать данные в файле. Проверьте формат.');
+            showMessage('error', 'Не удалось распознать данные в файле. Проверьте формат.');
           }
         } catch (err) {
           console.error('Error parsing Excel:', err);
-          alert('Ошибка при чтении Excel файла.');
+          showMessage('error', 'Ошибка при чтении файла.');
         }
       };
       reader.readAsArrayBuffer(file);
     } else if (extension === 'txt' || extension === 'csv') {
-      // Текстовый файл
       const reader = new FileReader();
       reader.onload = (e) => {
         const text = e.target?.result as string;
         updatePriceText(targetId, text);
+        const entries = parsePriceText(text);
+        showMessage('success', `Загружено ${entries.length} позиций из "${file.name}"`);
       };
       reader.readAsText(file, 'utf-8');
     } else {
-      alert('Поддерживаемые форматы: .xlsx, .xls, .txt, .csv');
+      showMessage('error', 'Поддерживаемые форматы: .xlsx, .xls, .txt, .csv');
     }
-  }, [selectedSupplierId, updatePriceText]);
+  }, [selectedSupplierId, updatePriceText, showMessage]);
 
-  // Drag & Drop
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(true);
@@ -104,33 +112,29 @@ function App() {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    
     const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0 && selectedSupplierId) {
-      handleFileUpload(files[0], selectedSupplierId);
+    if (files.length > 0) {
+      handleFileUpload(files[0]);
     }
-  }, [selectedSupplierId, handleFileUpload]);
+  }, [handleFileUpload]);
 
   const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    if (files.length > 0 && selectedSupplierId) {
-      handleFileUpload(files[0], selectedSupplierId);
+    if (files.length > 0) {
+      handleFileUpload(files[0]);
     }
-    // Сбрасываем input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, [selectedSupplierId, handleFileUpload]);
+  }, [handleFileUpload]);
 
   const selectedSupplier = useMemo(() => 
     suppliers.find(s => s.id === selectedSupplierId), 
     [suppliers, selectedSupplierId]
   );
 
-  // Формируем сводную таблицу
   const comparisonData = useMemo<ProductComparison[]>(() => {
     if (suppliers.length === 0) return [];
-
     const allProducts = new Map<string, ProductComparison>();
 
     for (const supplier of suppliers) {
@@ -138,10 +142,7 @@ function App() {
       for (const entry of entries) {
         const key = entry.productName.toLowerCase().trim();
         if (!allProducts.has(key)) {
-          allProducts.set(key, {
-            productName: entry.productName,
-            prices: {},
-          });
+          allProducts.set(key, { productName: entry.productName, prices: {} });
         }
         allProducts.get(key)!.prices[supplier.id] = entry.price;
       }
@@ -200,8 +201,28 @@ function App() {
         </div>
       </header>
 
+      {/* Upload notification */}
+      {uploadMessage && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-fade-in ${
+          uploadMessage.type === 'success' 
+            ? 'bg-green-500 text-white' 
+            : 'bg-red-500 text-white'
+        }`}>
+          {uploadMessage.type === 'success' ? (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          )}
+          <span className="text-sm font-medium">{uploadMessage.text}</span>
+        </div>
+      )}
+
       <div className="flex-1 flex flex-col lg:flex-row max-w-7xl mx-auto w-full">
-        {/* Sidebar - Suppliers */}
+        {/* Sidebar */}
         <aside className="w-full lg:w-80 bg-white border-b lg:border-b-0 lg:border-r border-gray-200 p-4 overflow-y-auto">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-800">Поставщики</h2>
@@ -227,16 +248,10 @@ function App() {
                 autoFocus
               />
               <div className="flex gap-2">
-                <button
-                  onClick={addSupplier}
-                  className="flex-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors"
-                >
+                <button onClick={addSupplier} className="flex-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors">
                   Добавить
                 </button>
-                <button
-                  onClick={() => { setShowAddForm(false); setNewSupplierName(''); }}
-                  className="flex-1 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-md hover:bg-gray-300 transition-colors"
-                >
+                <button onClick={() => { setShowAddForm(false); setNewSupplierName(''); }} className="flex-1 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-md hover:bg-gray-300 transition-colors">
                   Отмена
                 </button>
               </div>
@@ -264,14 +279,10 @@ function App() {
                     }`}
                     onClick={() => setSelectedSupplierId(supplier.id)}
                   >
-                    <div className={`w-3 h-3 rounded-full flex-shrink-0 ${
-                      entryCount > 0 ? 'bg-green-400' : 'bg-gray-300'
-                    }`} />
+                    <div className={`w-3 h-3 rounded-full flex-shrink-0 ${entryCount > 0 ? 'bg-green-400' : 'bg-gray-300'}`} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{supplier.name}</p>
-                      <p className="text-xs text-gray-500">
-                        {entryCount > 0 ? `${entryCount} товаров` : 'Прайс не загружен'}
-                      </p>
+                      <p className="text-xs text-gray-500">{entryCount > 0 ? `${entryCount} товаров` : 'Прайс не загружен'}</p>
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); removeSupplier(supplier.id); }}
@@ -298,108 +309,122 @@ function App() {
                 </svg>
               </div>
               <h3 className="text-lg font-semibold text-gray-700 mb-2">Начните работу</h3>
-              <p className="text-gray-500 max-w-md">
-                Добавьте поставщиков в левой панели, затем загрузите их прайс-листы в формате Excel (.xlsx, .xls) или вставьте текстовый прайс.
-                Система автоматически сравнит цены и выделит лучшие предложения.
+              <p className="text-gray-500 max-w-md mb-6">
+                Добавьте поставщиков, загрузите их прайс-листы (Excel или текст), и система автоматически сравнит цены.
               </p>
-              <div className="mt-6 p-4 bg-gray-50 rounded-lg text-left max-w-md space-y-3">
-                <div>
-                  <p className="text-xs font-semibold text-gray-600 mb-1">Поддерживаемые форматы:</p>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.xlsx</span>
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.xls</span>
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.txt</span>
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">.csv</span>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-gray-600 mb-1">Пример текстового формата:</p>
-                  <code className="text-xs text-gray-700 leading-relaxed block">
-                    Товар А - 1500<br/>
-                    Товар Б - 2300<br/>
-                    Товар В - 890
-                  </code>
-                </div>
-              </div>
+              <button
+                onClick={() => setShowAddForm(true)}
+                className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors shadow-sm font-medium"
+              >
+                + Добавить поставщика
+              </button>
             </div>
           ) : selectedSupplier ? (
-            <div className="space-y-6">
-              {/* File upload zone */}
+            <div className="space-y-5">
+              {/* ===== ЗОНА ЗАГРУЗКИ ФАЙЛОВ ===== */}
               <div
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
-                className={`bg-white rounded-xl shadow-sm border-2 border-dashed transition-all overflow-hidden ${
+                className={`relative bg-white rounded-xl border-2 border-dashed transition-all overflow-hidden ${
                   isDragOver
-                    ? 'border-blue-400 bg-blue-50 scale-[1.01]'
-                    : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-blue-500 bg-blue-50 shadow-md scale-[1.01]'
+                    : 'border-gray-300 hover:border-blue-300 hover:bg-blue-50/30'
                 }`}
               >
-                <div className="p-6 flex flex-col items-center justify-center text-center">
-                  <div className={`w-14 h-14 rounded-full flex items-center justify-center mb-3 transition-colors ${
-                    isDragOver ? 'bg-blue-100' : 'bg-gray-100'
-                  }`}>
-                    <svg className={`w-7 h-7 ${isDragOver ? 'text-blue-500' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
-                  </div>
-                  <p className="text-sm font-medium text-gray-700 mb-1">
-                    {isDragOver ? 'Отпустите файл для загрузки' : 'Перетащите файл сюда'}
-                  </p>
-                  <p className="text-xs text-gray-500 mb-3">
-                    или выберите файл вручную
-                  </p>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="px-4 py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
-                    >
-                      Выбрать файл
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".xlsx,.xls,.txt,.csv"
-                      onChange={handleFileInputChange}
-                      className="hidden"
-                    />
-                    <span className="text-xs text-gray-400">
-                      .xlsx, .xls, .txt, .csv
-                    </span>
+                <div className="p-6">
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    {/* Иконка загрузки */}
+                    <div className={`w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
+                      isDragOver ? 'bg-blue-100' : 'bg-gradient-to-br from-blue-50 to-indigo-100'
+                    }`}>
+                      <svg className={`w-8 h-8 ${isDragOver ? 'text-blue-600' : 'text-blue-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                    </div>
+                    
+                    {/* Текст и кнопка */}
+                    <div className="flex-1 text-center sm:text-left">
+                      <h3 className="text-base font-semibold text-gray-800 mb-1">
+                        {isDragOver ? '📂 Отпустите файл для загрузки' : `Загрузите прайс для «${selectedSupplier.name}»`}
+                      </h3>
+                      <p className="text-sm text-gray-500 mb-3">
+                        Перетащите файл сюда или нажмите кнопку ниже
+                      </p>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                          </svg>
+                          Выбрать файл
+                        </button>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept=".xlsx,.xls,.txt,.csv"
+                          onChange={handleFileInputChange}
+                          className="hidden"
+                        />
+                        <div className="flex items-center gap-1.5">
+                          <span className="inline-flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded">
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                            </svg>
+                            Excel
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-700 border border-gray-200 px-2 py-1 rounded">
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                            </svg>
+                            TXT
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-700 border border-gray-200 px-2 py-1 rounded">
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                            </svg>
+                            CSV
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Price input area */}
+              {/* ===== РУЧНОЙ ВВОД ===== */}
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-gray-800">{selectedSupplier.name}</h3>
-                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                      {selectedSupplierEntries.length} позиций
-                    </span>
+                    <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    <h3 className="font-semibold text-gray-800 text-sm">Или вставьте прайс текстом</h3>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-500">
-                      Или вставьте текст:
-                    </span>
-                  </div>
+                  <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                    {selectedSupplierEntries.length} позиций распознано
+                  </span>
                 </div>
                 <textarea
                   value={selectedSupplier.priceText}
                   onChange={(e) => updatePriceText(selectedSupplier.id, e.target.value)}
-                  placeholder={"Вставьте прайс-лист поставщика...\n\nПример:\nЯблоко Гала 1кг - 150\nБанан Эквадор 1кг - 89\nАпельсин Марокко 1кг - 120"}
-                  className="w-full h-48 px-5 py-4 text-sm font-mono text-gray-800 resize-none focus:outline-none placeholder:text-gray-400"
+                  placeholder={"Вставьте прайс-лист в любом формате:\n\nSamsung-A17-4/128-Gray  14500\nТовар Б - 2300\nЯблоко Гала 1кг — 150\nАртикул 123 | Товар | 990"}
+                  className="w-full h-40 px-5 py-4 text-sm font-mono text-gray-800 resize-none focus:outline-none placeholder:text-gray-400"
                 />
               </div>
 
-              {/* Parsed preview */}
+              {/* ===== РАСПОЗНАННЫЕ ПОЗИЦИИ ===== */}
               {selectedSupplierEntries.length > 0 && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                  <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
-                    <h3 className="font-semibold text-gray-800">Распознанные позиции</h3>
+                  <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                    <h3 className="font-semibold text-gray-800 text-sm">Распознанные позиции</h3>
+                    <span className="text-xs text-gray-500">
+                      {selectedSupplierEntries.length} из строк обработано
+                    </span>
                   </div>
-                  <div className="max-h-60 overflow-y-auto">
+                  <div className="max-h-64 overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
@@ -411,7 +436,7 @@ function App() {
                       <tbody>
                         {selectedSupplierEntries.map((entry, idx) => (
                           <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
-                            <td className="px-5 py-2 text-gray-500">{idx + 1}</td>
+                            <td className="px-5 py-2 text-gray-400 text-xs">{idx + 1}</td>
                             <td className="px-5 py-2 text-gray-800">{entry.productName}</td>
                             <td className="px-5 py-2 text-right font-medium text-gray-800">
                               {entry.price !== null ? entry.price.toLocaleString('ru-RU') + ' ₽' : '—'}
@@ -424,20 +449,20 @@ function App() {
                 </div>
               )}
 
-              {/* Comparison Table */}
+              {/* ===== СРАВНИТЕЛЬНАЯ ТАБЛИЦА ===== */}
               {suppliers.length > 1 && comparisonData.length > 0 && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                   <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-gray-800">Сравнительная таблица</h3>
+                      <h3 className="font-semibold text-gray-800 text-sm">Сравнительная таблица</h3>
                       <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
                         {comparisonData.length} товаров
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500">
-                      <span className="inline-block w-3 h-3 bg-green-100 border border-green-300 rounded-sm mr-1 align-middle"></span>
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <span className="inline-block w-4 h-4 bg-green-100 border border-green-300 rounded-sm"></span>
                       Лучшая цена
-                    </p>
+                    </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -494,7 +519,7 @@ function App() {
                 </div>
               )}
 
-              {/* Info about single supplier */}
+              {/* Подсказка для одного поставщика */}
               {suppliers.length === 1 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                   <div className="flex gap-3">
@@ -502,9 +527,9 @@ function App() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <div>
-                      <p className="text-sm font-medium text-amber-800">Добавьте ещё поставщиков</p>
+                      <p className="text-sm font-medium text-amber-800">Добавьте ещё поставщиков для сравнения</p>
                       <p className="text-xs text-amber-700 mt-1">
-                        Сравнительная таблица с подсветкой лучших цен появится, когда вы добавите минимум 2 поставщиков и загрузите их прайс-листы.
+                        Сравнительная таблица с подсветкой лучших цен появится при 2+ поставщиках.
                       </p>
                     </div>
                   </div>
@@ -517,15 +542,9 @@ function App() {
 
       {/* Footer */}
       <footer className="bg-white border-t border-gray-200 px-4 py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between text-xs text-gray-500">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
           <p>Данные сохраняются локально в браузере</p>
-          <div className="flex items-center gap-2">
-            <span>Форматы:</span>
-            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.xlsx</span>
-            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.xls</span>
-            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.txt</span>
-            <span className="bg-gray-100 px-1.5 py-0.5 rounded">.csv</span>
-          </div>
+          <p>Умный парсер поддерживает форматы: <code className="bg-gray-100 px-1 py-0.5 rounded">Товар - Цена</code> <code className="bg-gray-100 px-1 py-0.5 rounded">Товар  Цена</code> <code className="bg-gray-100 px-1 py-0.5 rounded">Товар: Цена</code> и Excel</p>
         </div>
       </footer>
     </div>

@@ -1,118 +1,183 @@
 import { PriceEntry } from './types';
 import * as XLSX from 'xlsx';
 
+// ============================================================
+//  УТИЛИТЫ
+// ============================================================
+
 /**
- * Очищает строку от лишних символов
+ * Очищает строку от мусора
  */
-function cleanString(str: string): string {
+function cleanName(str: string): string {
   return str
-    .replace(/\s+/g, ' ')      // множественные пробелы -> один
-    .replace(/["«»""„]/g, '')   // убираем кавычки
-    .replace(/^\s*[\d.]+\s*[.)]\s*/, '') // убираем нумерацию "1. " или "1) "
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s\-—–:;.]+/, '')  // убираем разделители в начале
+    .replace(/[\s\-—–:;.]+$/, '')  // убираем разделители в конце
+    .replace(/^\d+[.)]\s*/, '')    // убираем нумерацию "1. " или "1) "
+    .replace(/^["«»""„']+/g, '')   // убираем кавычки
+    .replace(/["«»""„']+$/g, '')
     .trim();
 }
 
 /**
- * Извлекает цену из строки (последнее число в строке)
+ * Находит ВСЕ числовые фрагменты в строке с их позициями
+ * Возвращает массив { value, start, end }
  */
-function extractPrice(str: string): number | null {
-  // Ищем все числа в строке
-  const numbers = str.match(/\d+[\d\s.,]*\d|\d+/g);
-  if (!numbers || numbers.length === 0) return null;
+function findAllNumbers(str: string): { value: number; start: number; end: number; raw: string }[] {
+  const results: { value: number; start: number; end: number; raw: string }[] = [];
+  // Ищем числа: целые, с пробелами-разделителями тысяч, с дробной частью
+  const regex = /(\d[\d\s.,]*\d|\d)(?=\s|$|[^.\d]|[^.\d,\s])/g;
+  let match;
   
-  // Берём последнее число — обычно это цена
-  const lastNum = numbers[numbers.length - 1];
-  const cleaned = lastNum.replace(/\s/g, '').replace(',', '.');
-  const price = parseFloat(cleaned);
-  
-  return isNaN(price) ? null : price;
-}
-
-/**
- * Извлекает название товара (всё до цены)
- */
-function extractProductName(line: string): string {
-  // Убираем нумерацию в начале
-  let cleaned = line.replace(/^\s*[\d.]+\s*[.)]\s*/, '');
-  
-  // Пробуем найти разделитель и взять часть до него
-  const separators = [' - ', ' — ', ' – ', '\t', ' | ', ' ; ', ': '];
-  
-  for (const sep of separators) {
-    const idx = cleaned.lastIndexOf(sep);
-    if (idx > 0) {
-      const beforeSep = cleaned.substring(0, idx).trim();
-      const afterSep = cleaned.substring(idx + sep.length).trim();
-      
-      // Проверяем что после разделителя есть число
-      const priceCheck = afterSep.match(/^[\d\s.,]+/);
-      if (priceCheck) {
-        return cleanString(beforeSep);
-      }
+  while ((match = regex.exec(str)) !== null) {
+    const raw = match[1];
+    // Очищаем число от пробелов и запятых
+    const cleaned = raw.replace(/\s/g, '').replace(/,/g, '.');
+    // Убираем лишние точки (например "1.234.567" -> "1234.567")
+    const parts = cleaned.split('.');
+    let numStr: string;
+    if (parts.length > 2) {
+      // Несколько точек — скорее всего разделители тысяч
+      numStr = parts.join('');
+    } else {
+      numStr = cleaned;
+    }
+    
+    const value = parseFloat(numStr);
+    if (!isNaN(value) && value > 0) {
+      results.push({
+        value,
+        start: match.index,
+        end: match.index + raw.length,
+        raw,
+      });
     }
   }
   
-  // Если разделитель не найден, берём всё до последнего числа
-  const match = cleaned.match(/^(.+?)\s+(\d[\d\s.,]*)\s*(руб|р\.|₽|грн|₸|$)/i);
-  if (match) {
-    return cleanString(match[1]);
-  }
-  
-  // Фолбэк: всё до последнего числа
-  const lastNumIdx = cleaned.search(/\d[\d\s.,]*\d|\d+\s*$/);
-  if (lastNumIdx > 0) {
-    return cleanString(cleaned.substring(0, lastNumIdx));
-  }
-  
-  return cleanString(cleaned);
+  return results;
 }
 
 /**
- * Определяет, является ли строка заголовком/шапкой таблицы
+ * Проверяет, является ли строка заголовком/шапкой
  */
 function isHeaderLine(line: string): boolean {
-  const headerPatterns = [
-    /^наименование/i,
-    /^товар/i,
-    /^название/i,
-    /^продукция/i,
-    /^позиция/i,
-    /^#?\s*п\/?п/i,
-    /^№/i,
-    /^наим/i,
-    /^\s*название\s*$/i,
-    /^\s*товар\s*$/i,
+  const lower = line.trim().toLowerCase();
+  const patterns = [
+    /^наименование/i, /^товар/i, /^название/i, /^продукци/i,
+    /^позици/i, /^п\/?п/i, /^№/, /^наим/i, /^артикул/i,
+    /^код/i, /^sku/i, /^model/i, /^name/i, /^product/i,
+    /^price/i, /^цена/i, /^стоимость/i, /^прайс/i,
+    /^описание/i, /^характеристик/i, /^единиц/i, /^кол-во/i,
+    /^количество/i, /^остаток/i, /^сумма/i, /^итог/i,
   ];
-  
-  const trimmed = line.trim().toLowerCase();
-  return headerPatterns.some(pattern => pattern.test(trimmed));
+  return patterns.some(p => p.test(lower));
 }
 
 /**
- * Определяет, является ли строка пустой или мусорной
+ * Проверяет, является ли строка мусорной
  */
 function isGarbageLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return true;
-  if (trimmed.length < 3) return true;
-  if (/^[-=_*#+]{3,}$/.test(trimmed)) return true; // линии из символов
-  if (/^(итого|всего|внимание|условия|контакт|телефон|адрес|сайт|www|http)/i.test(trimmed)) return true;
+  const t = line.trim();
+  if (t.length === 0) return true;
+  if (t.length < 3) return true;
+  if (/^[-=_*#+~]{3,}$/.test(t)) return true;
+  if (/^(итого|всего|внимание|условия|контакт|телефон|адрес|сайт|www|http|факс|email|@|скидк|акци)/i.test(t)) return true;
+  // Строка без единого числа — скорее всего мусор
+  if (!/\d/.test(t)) return true;
   return false;
 }
 
+// ============================================================
+//  УМНЫЙ ПАРСЕР PLAIN TEXT
+// ============================================================
+
 /**
- * Парсит plain text прайс в формате:
- * "Наименование товара - цена"
+ * Главная функция: извлекает название и цену из строки.
  * 
- * Поддерживает множество форматов:
- * - "Товар - 1234"
- * - "Товар — 1234"  
- * - "Товар: 1234"
- * - "Товар  1234" (просто пробел)
- * - "1. Товар - 1234" (с нумерацией)
- * - "Товар - 1 234" (с пробелами в числе)
- * - "Товар - 1,234.56" (с дробной частью)
- * - "Товар 1234 руб" (с валютой)
+ * Стратегия:
+ * 1. Находим все числа в строке
+ * 2. Последнее «большое» число — это цена
+ * 3. Всё до позиции этого числа — название
+ * 
+ * Это работает для форматов:
+ * - "Samsung-A17-4/128-Gray  14500"
+ * - "Товар А - 1500"
+ * - "1. Яблоко Гала 1кг - 150"
+ * - "Артикул 12345 | Товар | 990"
+ * - "Товар  1 500 руб"
+ */
+function smartParseLine(line: string): { name: string; price: number } | null {
+  const trimmed = line.trim();
+  if (isGarbageLine(trimmed) || isHeaderLine(trimmed)) return null;
+
+  const numbers = findAllNumbers(trimmed);
+  if (numbers.length === 0) return null;
+
+  // === Стратегия 1: Есть явный разделитель ===
+  const separators = [' - ', ' — ', ' – ', '\t', ' | ', ' ; ', ':\t', ': '];
+  
+  for (const sep of separators) {
+    // Ищем разделитель справа налево (последний)
+    const lastSepIdx = trimmed.lastIndexOf(sep);
+    if (lastSepIdx > 0) {
+      const afterSep = trimmed.substring(lastSepIdx + sep.length).trim();
+      const beforeSep = trimmed.substring(0, lastSepIdx).trim();
+      
+      // Проверяем что после разделителя — число (возможно с валютой)
+      const priceMatch = afterSep.match(/^[\d\s.,]+/);
+      if (priceMatch) {
+        const priceStr = priceMatch[0].replace(/\s/g, '').replace(/,/g, '.');
+        const price = parseFloat(priceStr);
+        if (!isNaN(price) && price > 0 && beforeSep.length > 0) {
+          return { name: cleanName(beforeSep), price };
+        }
+      }
+    }
+  }
+
+  // === Стратегия 2: Двойной (или более) пробел как разделитель ===
+  const doubleSpaceMatch = trimmed.match(/^(.+?)\s{2,}(.+)$/);
+  if (doubleSpaceMatch) {
+    const left = doubleSpaceMatch[1].trim();
+    const right = doubleSpaceMatch[2].trim();
+    
+    // Проверяем: правая часть — это число?
+    const rightNum = parseFloat(right.replace(/\s/g, '').replace(/,/g, '.'));
+    if (!isNaN(rightNum) && rightNum > 0) {
+      return { name: cleanName(left), price: rightNum };
+    }
+    
+    // Левая часть — число? (редко, но бывает)
+    const leftNum = parseFloat(left.replace(/\s/g, '').replace(/,/g, '.'));
+    if (!isNaN(leftNum) && leftNum > 0) {
+      // Проверяем что правая часть — это текст (название)
+      if (/[а-яёa-z]/i.test(right)) {
+        return { name: cleanName(right), price: leftNum };
+      }
+    }
+  }
+
+  // === Стратегия 3: Берём ПОСЛЕДНЕЕ число как цену ===
+  // Всё что до него — название
+  const lastNum = numbers[numbers.length - 1];
+  
+  // Но сначала проверим: может последнее число — это часть названия (артикул)?
+  // Если перед последним числом есть ещё числа и между ними текст — 
+  // скорее всего последнее число это цена
+  const beforeLastNum = trimmed.substring(0, lastNum.start).trim();
+  
+  // Убираем разделитель перед числом
+  const nameCleaned = beforeLastNum.replace(/[\s\-—–:;|]+$/, '').trim();
+  
+  if (nameCleaned.length >= 2) {
+    return { name: cleanName(nameCleaned), price: lastNum.value };
+  }
+
+  return null;
+}
+
+/**
+ * Парсит plain text прайс
  */
 export function parsePriceText(text: string): PriceEntry[] {
   const entries: PriceEntry[] = [];
@@ -120,67 +185,13 @@ export function parsePriceText(text: string): PriceEntry[] {
   const seenNames = new Set<string>();
 
   for (const line of lines) {
-    const trimmedLine = line.trim();
+    const result = smartParseLine(line);
     
-    // Пропускаем мусор
-    if (isGarbageLine(trimmedLine)) continue;
-    if (isHeaderLine(trimmedLine)) continue;
-
-    // Пробуем распарсить строку
-    let productName = '';
-    let price: number | null = null;
-
-    // Формат с явным разделителем: "Название - 1234"
-    const separatorMatch = trimmedLine.match(/^(.+?)\s*[-—–:;|]\s*(\d[\d\s.,]*)\s*(руб|р\.?|₽|грн|₸|usd|\$|€)?\s*$/i);
-    
-    if (separatorMatch) {
-      productName = cleanString(separatorMatch[1]);
-      const priceStr = separatorMatch[2].trim().replace(/\s/g, '').replace(',', '.');
-      price = parseFloat(priceStr);
-    }
-    
-    // Формат с табуляцией: "Название\t1234"
-    if (!productName) {
-      const tabMatch = trimmedLine.match(/^(.+?)\t+(\d[\d\s.,]*)\s*(руб|р\.?|₽|грн|₸)?\s*$/i);
-      if (tabMatch) {
-        productName = cleanString(tabMatch[1]);
-        const priceStr = tabMatch[2].trim().replace(/\s/g, '').replace(',', '.');
-        price = parseFloat(priceStr);
-      }
-    }
-    
-    // Формат без явного разделителя: "Название 1234" или "Название 1234 руб"
-    if (!productName) {
-      const noSepMatch = trimmedLine.match(/^(.+?)\s{2,}(\d[\d\s.,]*)\s*(руб|р\.?|₽|грн|₸)?\s*$/i);
-      if (noSepMatch) {
-        productName = cleanString(noSepMatch[1]);
-        const priceStr = noSepMatch[2].trim().replace(/\s/g, '').replace(',', '.');
-        price = parseFloat(priceStr);
-      }
-    }
-    
-    // Формат: "1. Название - 1234" (с нумерацией)
-    if (!productName) {
-      const numberedMatch = trimmedLine.match(/^\s*\d+[.)]\s*(.+?)\s*[-—–:;|]\s*(\d[\d\s.,]*)\s*(руб|р\.?|₽|грн|₸)?\s*$/i);
-      if (numberedMatch) {
-        productName = cleanString(numberedMatch[1]);
-        const priceStr = numberedMatch[2].trim().replace(/\s/g, '').replace(',', '.');
-        price = parseFloat(priceStr);
-      }
-    }
-
-    // Фолбэк: извлекаем название и цену из любой строки
-    if (!productName && trimmedLine.length > 3) {
-      productName = extractProductName(trimmedLine);
-      price = extractPrice(trimmedLine);
-    }
-
-    // Валидация и добавление
-    if (productName && productName.length > 1 && price !== null && !isNaN(price) && price > 0) {
-      const key = productName.toLowerCase();
+    if (result && result.name.length >= 2 && result.price > 0) {
+      const key = result.name.toLowerCase().trim();
       if (!seenNames.has(key)) {
         seenNames.add(key);
-        entries.push({ productName, price });
+        entries.push({ productName: result.name, price: result.price });
       }
     }
   }
@@ -188,124 +199,215 @@ export function parsePriceText(text: string): PriceEntry[] {
   return entries;
 }
 
+// ============================================================
+//  УМНЫЙ ПАРСЕР EXCEL
+// ============================================================
+
 /**
- * Парсит Excel файл (xlsx, xls)
+ * Определяет, является ли значение числом (ценой)
+ */
+function isPriceValue(val: unknown): number | null {
+  if (typeof val === 'number' && !isNaN(val) && val > 0) return val;
+  if (typeof val === 'string') {
+    const cleaned = val.replace(/[\s₽$€£руб.р]/gi, '').replace(/,/g, '.').trim();
+    const num = parseFloat(cleaned);
+    if (!isNaN(num) && num > 0 && /^\d+\.?\d*$/.test(cleaned)) return num;
+  }
+  return null;
+}
+
+/**
+ * Определяет, является ли ячейка текстовым названием товара
+ */
+function isProductNameValue(val: unknown): boolean {
+  if (typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  if (trimmed.length < 2) return false;
+  // Должен содержать буквы
+  if (!/[а-яёa-z]/i.test(trimmed)) return false;
+  // Не должен быть заголовком
+  if (isHeaderLine(trimmed)) return false;
+  return true;
+}
+
+/**
+ * Анализирует таблицу и находит колонку с ценами и колонку с названиями
+ */
+function detectColumns(data: unknown[][]): { nameCol: number; priceCol: number; dataStartRow: number } {
+  if (data.length === 0) return { nameCol: 0, priceCol: 1, dataStartRow: 0 };
+
+  const maxCols = Math.max(...data.map(row => (row as unknown[]).length));
+  
+  // === Попытка 1: Ищем строку-заголовок ===
+  let headerRowIdx = -1;
+  let nameCol = -1;
+  let priceCol = -1;
+  
+  for (let rowIdx = 0; rowIdx < Math.min(data.length, 15); rowIdx++) {
+    const row = data[rowIdx] as unknown[];
+    if (!row) continue;
+    
+    for (let colIdx = 0; colIdx < row.length; colIdx++) {
+      const cell = String(row[colIdx] || '').trim().toLowerCase();
+      if (/наименование|товар|название|продукц|позиц|наим|описан|артикул|модель/i.test(cell)) {
+        nameCol = colIdx;
+        headerRowIdx = rowIdx;
+      }
+      if (/цена|стоимость|прайс|cost|price|сумма|руб/i.test(cell)) {
+        priceCol = colIdx;
+        headerRowIdx = rowIdx;
+      }
+    }
+    
+    if (nameCol >= 0 && priceCol >= 0) break;
+  }
+  
+  // Если нашли заголовок — данные начинаются со следующей строки
+  if (headerRowIdx >= 0) {
+    // Если нашли только одну колонку из двух — пробуем угадать вторую
+    if (nameCol >= 0 && priceCol < 0) {
+      // Цена скорее всего справа от названия
+      for (let col = nameCol + 1; col < maxCols; col++) {
+        // Проверяем есть ли числа в этой колонке
+        let numCount = 0;
+        for (let r = headerRowIdx + 1; r < Math.min(data.length, headerRowIdx + 20); r++) {
+          const row = data[r] as unknown[];
+          if (row && isPriceValue(row[col]) !== null) numCount++;
+        }
+        if (numCount > 0) { priceCol = col; break; }
+      }
+    }
+    if (priceCol >= 0 && nameCol < 0) {
+      // Название скорее всего слева от цены
+      for (let col = priceCol - 1; col >= 0; col--) {
+        let textCount = 0;
+        for (let r = headerRowIdx + 1; r < Math.min(data.length, headerRowIdx + 20); r++) {
+          const row = data[r] as unknown[];
+          if (row && isProductNameValue(row[col])) textCount++;
+        }
+        if (textCount > 0) { nameCol = col; break; }
+      }
+    }
+    
+    if (nameCol >= 0 && priceCol >= 0) {
+      return { nameCol, priceCol, dataStartRow: headerRowIdx + 1 };
+    }
+  }
+
+  // === Попытка 2: Статистический анализ — ищем колонку с числами ===
+  const colStats: { col: number; numCount: number; textCount: number }[] = [];
+  
+  for (let col = 0; col < maxCols; col++) {
+    let numCount = 0;
+    let textCount = 0;
+    
+    for (let rowIdx = 0; rowIdx < Math.min(data.length, 30); rowIdx++) {
+      const row = data[rowIdx] as unknown[];
+      if (!row || col >= row.length) continue;
+      
+      const val = row[col];
+      if (isPriceValue(val) !== null) numCount++;
+      if (isProductNameValue(val)) textCount++;
+    }
+    
+    colStats.push({ col, numCount, textCount });
+  }
+  
+  // Колонка с максимальным кол-вом чисел — цена
+  const priceColCandidate = colStats.reduce((best, curr) => 
+    curr.numCount > best.numCount ? curr : best, { col: 0, numCount: 0, textCount: 0 }
+  );
+  
+  // Колонка с максимальным кол-вом текста — название
+  const nameColCandidate = colStats.reduce((best, curr) => 
+    curr.textCount > best.textCount ? curr : best, { col: 0, numCount: 0, textCount: 0 }
+  );
+  
+  if (priceColCandidate.numCount > 0 && nameColCandidate.textCount > 0) {
+    // Определяем с какой строки начинаются данные (пропускаем заголовки)
+    let dataStartRow = 0;
+    for (let r = 0; r < Math.min(data.length, 10); r++) {
+      const row = data[r] as unknown[];
+      if (!row) continue;
+      
+      const nameVal = row[nameColCandidate.col];
+      const priceVal = row[priceColCandidate.col];
+      
+      // Если обе ячейки содержат данные — это строка с данными
+      if (isProductNameValue(nameVal) && isPriceValue(priceVal) !== null) {
+        dataStartRow = r;
+        break;
+      }
+    }
+    
+    return {
+      nameCol: nameColCandidate.col,
+      priceCol: priceColCandidate.col,
+      dataStartRow,
+    };
+  }
+
+  // === Фолбэк: первые две колонки ===
+  return { nameCol: 0, priceCol: 1, dataStartRow: 0 };
+}
+
+/**
+ * Парсит Excel файл
  */
 export function parseExcelFile(data: ArrayBuffer): PriceEntry[] {
   const workbook = XLSX.read(data, { type: 'array' });
   const entries: PriceEntry[] = [];
   const seenNames = new Set<string>();
 
-  // Берём первый лист
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) return entries;
-  
+
   const sheet = workbook.Sheets[sheetName];
-  const jsonData = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, defval: '' });
+  const jsonData = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
 
-  let nameColIdx = -1;
-  let priceColIdx = -1;
+  if (jsonData.length === 0) return entries;
 
-  // Ищем заголовок для определения колонок
-  for (let rowIdx = 0; rowIdx < Math.min(jsonData.length, 10); rowIdx++) {
-    const row = jsonData[rowIdx] as string[];
+  const { nameCol, priceCol, dataStartRow } = detectColumns(jsonData);
+
+  for (let rowIdx = dataStartRow; rowIdx < jsonData.length; rowIdx++) {
+    const row = jsonData[rowIdx] as unknown[];
     if (!row) continue;
-    
-    for (let colIdx = 0; colIdx < row.length; colIdx++) {
-      const cell = String(row[colIdx] || '').trim().toLowerCase();
-      if (/наименование|товар|название|продукц|позиц|наим/i.test(cell)) {
-        nameColIdx = colIdx;
-      }
-      if (/цена|стоимость|прайс|руб|cost|price/i.test(cell)) {
-        priceColIdx = colIdx;
-      }
-    }
-    
-    if (nameColIdx >= 0 && priceColIdx >= 0) break;
-  }
 
-  // Если не нашли заголовок — пробуем определить по данным
-  if (nameColIdx < 0 || priceColIdx < 0) {
-    // Ищем строку с данными для определения колонок
-    for (let rowIdx = 0; rowIdx < Math.min(jsonData.length, 20); rowIdx++) {
-      const row = jsonData[rowIdx] as string[];
-      if (!row || row.length < 2) continue;
-      
-      for (let colIdx = 0; colIdx < row.length; colIdx++) {
-        const cell = String(row[colIdx] || '').trim();
-        // Проверяем есть ли число
-        const num = parseFloat(cell.replace(/\s/g, '').replace(',', '.'));
-        if (!isNaN(num) && num > 0 && priceColIdx < 0) {
-          priceColIdx = colIdx;
-          // Название скорее всего в предыдущей колонке
-          if (nameColIdx < 0 && colIdx > 0) {
-            nameColIdx = colIdx - 1;
-          }
-        }
-      }
-      if (nameColIdx >= 0 && priceColIdx >= 0) break;
-    }
-  }
+    const nameVal = row[nameCol];
+    const priceVal = row[priceCol];
 
-  // Если всё ещё не нашли — берём первые две колонки
-  if (nameColIdx < 0) nameColIdx = 0;
-  if (priceColIdx < 0) priceColIdx = 1;
+    const nameStr = String(nameVal || '').trim();
+    const price = isPriceValue(priceVal);
 
-  // Парсим данные
-  for (let rowIdx = 0; rowIdx < jsonData.length; rowIdx++) {
-    const row = jsonData[rowIdx] as (string | number)[];
-    if (!row || row.length < 2) continue;
+    if (isGarbageLine(nameStr) || isHeaderLine(nameStr)) continue;
+    if (nameStr.length < 2 || price === null) continue;
 
-    const nameCell = String(row[nameColIdx] || '').trim();
-    const priceCell = row[priceColIdx];
+    const productName = cleanName(nameStr);
+    if (productName.length < 2) continue;
 
-    // Пропускаем заголовки и мусор
-    if (isHeaderLine(nameCell) || isGarbageLine(nameCell)) continue;
-    if (nameCell.length < 2) continue;
-
-    // Извлекаем цену
-    let price: number | null = null;
-    if (typeof priceCell === 'number') {
-      price = priceCell;
-    } else {
-      const priceStr = String(priceCell || '').replace(/\s/g, '').replace(',', '.');
-      const parsed = parseFloat(priceStr);
-      price = isNaN(parsed) ? null : parsed;
-    }
-
-    const productName = cleanString(nameCell);
-    
-    if (productName && productName.length > 1 && price !== null && !isNaN(price) && price > 0) {
-      const key = productName.toLowerCase();
-      if (!seenNames.has(key)) {
-        seenNames.add(key);
-        entries.push({ productName, price });
-      }
+    const key = productName.toLowerCase();
+    if (!seenNames.has(key)) {
+      seenNames.add(key);
+      entries.push({ productName, price });
     }
   }
 
   return entries;
 }
 
-/**
- * Конвертирует PriceEntry[] в plain text
- */
+// ============================================================
+//  ЭКСПОРТ / УТИЛИТЫ
+// ============================================================
+
 export function entriesToPlainText(entries: PriceEntry[]): string {
-  return entries.map(e => `${e.productName} - ${e.price}`).join('\n');
+  return entries.map(e => `${e.productName}  ${e.price}`).join('\n');
 }
 
-/**
- * Находит минимальную цену из списка
- */
 export function findMinPrice(prices: (number | null)[]): number | null {
-  const validPrices = prices.filter((p): p is number => p !== null);
-  if (validPrices.length === 0) return null;
-  return Math.min(...validPrices);
+  const valid = prices.filter((p): p is number => p !== null);
+  return valid.length === 0 ? null : Math.min(...valid);
 }
 
-/**
- * Экспорт данных в CSV
- */
 export function exportToCSV(
   data: { productName: string; prices: Record<string, number | null> }[],
   suppliers: { id: string; name: string }[]
@@ -319,10 +421,5 @@ export function exportToCSV(
     return [item.productName, ...prices];
   });
 
-  const csvContent = [
-    header.join(';'),
-    ...rows.map(row => row.join(';'))
-  ].join('\n');
-
-  return csvContent;
+  return [header.join(';'), ...rows.map(row => row.join(';'))].join('\n');
 }
