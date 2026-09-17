@@ -2,9 +2,9 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Supplier, ProductComparison } from './types';
 import { parsePriceText, parseExcelFile, entriesToPlainText, findMinPrice, exportToCSV } from './parser';
 import {
-  getSettings, saveSettings, PROVIDERS, LLMProvider,
+  getSettings, saveSettings, MODELS, DEFAULT_MODEL,
   normalizeNamesBatch, clearNormalizationCache, getCacheSize,
-  NormalizationStats
+  NormalizationStats, LLMSettings
 } from './llmService';
 
 function generateId(): string {
@@ -25,13 +25,14 @@ function App() {
 
   // LLM settings
   const [showSettings, setShowSettings] = useState(false);
-  const [settings, setSettingsState] = useState(getSettings());
+  const [settings, setSettingsState] = useState<LLMSettings>(getSettings());
   const [isNormalizing, setIsNormalizing] = useState(false);
   const [normalizationProgress, setNormalizationProgress] = useState({ current: 0, total: 0 });
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [useLLM, setUseLLM] = useState(false);
   const [normalizedMap, setNormalizedMap] = useState<Record<string, string>>({});
   const [cacheSize, setCacheSize] = useState(getCacheSize());
+  const [lastStats, setLastStats] = useState<NormalizationStats | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('normalized_map');
@@ -131,7 +132,7 @@ function App() {
     suppliers.find(s => s.id === selectedSupplierId), [suppliers, selectedSupplierId]
   );
 
-  // Comparison table — используем нормализацию если она есть в map
+  // Comparison table
   const hasAnyNormalization = Object.keys(normalizedMap).length > 0;
   const effectiveLLM = useLLM && hasAnyNormalization;
 
@@ -142,13 +143,10 @@ function App() {
     for (const supplier of suppliers) {
       const entries = parsePriceText(supplier.priceText);
       for (const entry of entries) {
-        // Используем нормализованное имя если оно есть и отличается от оригинала
         const norm = normalizedMap[entry.productName];
         const useNorm = effectiveLLM && norm && norm.toLowerCase().trim() !== entry.productName.toLowerCase().trim();
-        
         const key = useNorm ? norm.toLowerCase().trim() : entry.productName.toLowerCase().trim();
         const displayName = useNorm ? norm : entry.productName;
-        
         if (!allProducts.has(key)) {
           allProducts.set(key, { productName: displayName, prices: {} });
         }
@@ -172,12 +170,10 @@ function App() {
     return parsePriceText(selectedSupplier.priceText);
   }, [selectedSupplier]);
 
-  const [lastStats, setLastStats] = useState<NormalizationStats | null>(null);
-
   // LLM Normalization
   const handleNormalize = useCallback(async () => {
     if (!settings.apiKey) {
-      showMessage('error', 'Укажите API ключ в настройках');
+      showMessage('error', 'Укажите API ключ NordRouter в настройках');
       setShowSettings(true);
       return;
     }
@@ -200,7 +196,6 @@ function App() {
     const namesArray = Array.from(allNames);
     setNormalizationProgress({ current: 0, total: namesArray.length });
 
-    // normalizeNamesBatch НИКОГДА не выбрасывает — всегда возвращает частичный результат
     const { map, stats } = await normalizeNamesBatch(
       namesArray,
       (current: number, total: number) => setNormalizationProgress({ current, total }),
@@ -217,13 +212,12 @@ function App() {
     setCacheSize(getCacheSize());
     setLastStats(stats);
 
-    // Проверяем была ли отмена
     if (controller.signal.aborted) {
       showMessage('success', `⏹ Отменено. Нормализовано ${stats.normalized} из ${stats.total}`);
     } else if (stats.failed > 0 && stats.normalized === 0) {
-      showMessage('error', `Не удалось нормализовать. Проверьте API ключ и попробуйте другой провайдер.`);
+      showMessage('error', `Не удалось нормализовать. Проверьте API ключ и баланс.`);
     } else if (stats.failed > 0) {
-      showMessage('success', `✓ ${stats.normalized} нормализовано, ${stats.failed} не удалось (rate limit)`);
+      showMessage('success', `✓ ${stats.normalized} нормализовано, ${stats.failed} не удалось`);
     } else {
       showMessage('success', `✓ Нормализовано ${stats.normalized} названий (${stats.fromCache} из кэша)`);
     }
@@ -232,14 +226,11 @@ function App() {
     setAbortController(null);
   }, [settings.apiKey, suppliers, normalizedMap, showMessage]);
 
-  // Отмена нормализации
   const handleCancelNormalization = useCallback(() => {
-    if (abortController) {
-      abortController.abort();
-    }
+    if (abortController) abortController.abort();
   }, [abortController]);
 
-  const handleSaveSettings = useCallback((newSettings: typeof settings) => {
+  const handleSaveSettings = useCallback((newSettings: LLMSettings) => {
     saveSettings(newSettings);
     setSettingsState(newSettings);
     setCacheSize(getCacheSize());
@@ -274,7 +265,7 @@ function App() {
     return names.size;
   }, [suppliers]);
 
-  const currentProvider = PROVIDERS.find(p => p.id === settings.provider) || PROVIDERS[0];
+  const currentModel = MODELS.find(m => m.id === settings.model) || MODELS[3];
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -330,7 +321,7 @@ function App() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                {currentProvider.name}
+                {settings.apiKey ? currentModel.name : 'Настройки'}
               </button>
               {comparisonData.length > 0 && (
                 <button onClick={handleExportCSV}
@@ -437,7 +428,7 @@ function App() {
               <p className="text-xs text-purple-600">{Object.keys(normalizedMap).length} названий в кэше</p>
               {effectiveLLM && <p className="text-xs text-purple-500 mt-1">✓ Активна — товары группируются</p>}
               {lastStats && lastStats.failed > 0 && (
-                <p className="text-xs text-amber-600 mt-1">⚠ {lastStats.failed} не нормализовано (rate limit)</p>
+                <p className="text-xs text-amber-600 mt-1">⚠ {lastStats.failed} не нормализовано</p>
               )}
             </div>
           )}
@@ -522,7 +513,7 @@ function App() {
                         <tr>
                           <th className="text-left px-5 py-2 text-gray-600 font-medium w-12">№</th>
                           <th className="text-left px-5 py-2 text-gray-600 font-medium">Оригинал</th>
-                          {Object.keys(normalizedMap).length > 0 && (
+                          {hasAnyNormalization && (
                             <th className="text-left px-5 py-2 text-purple-600 font-medium">→ Стандарт</th>
                           )}
                           <th className="text-right px-5 py-2 text-gray-600 font-medium w-32">Цена</th>
@@ -536,7 +527,7 @@ function App() {
                             <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
                               <td className="px-5 py-2 text-gray-400 text-xs">{idx + 1}</td>
                               <td className="px-5 py-2 text-gray-800">{entry.productName}</td>
-                              {Object.keys(normalizedMap).length > 0 && (
+                              {hasAnyNormalization && (
                                 <td className={`px-5 py-2 text-xs ${hasNorm ? 'text-purple-700 font-medium' : 'text-gray-400'}`}>
                                   {hasNorm ? normalized : '—'}
                                 </td>
@@ -553,14 +544,14 @@ function App() {
                 </div>
               )}
 
-              {/* Stats after normalization */}
+              {/* Stats */}
               {lastStats && !isNormalizing && (
                 <div className={`rounded-xl p-4 border ${lastStats.failed > 0 && lastStats.normalized === 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
                   <div className="flex items-center gap-4 text-sm">
                     <span className="font-medium">Результат:</span>
                     <span className="text-green-700">✓ {lastStats.normalized} нормализовано</span>
                     {lastStats.fromCache > 0 && <span className="text-gray-500">({lastStats.fromCache} из кэша)</span>}
-                    {lastStats.failed > 0 && <span className="text-red-600">✗ {lastStats.failed} не удалось (rate limit)</span>}
+                    {lastStats.failed > 0 && <span className="text-red-600">✗ {lastStats.failed} не удалось</span>}
                     <button onClick={() => setLastStats(null)} className="ml-auto text-gray-400 hover:text-gray-600 text-xs">✕</button>
                   </div>
                 </div>
@@ -575,12 +566,10 @@ function App() {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                       </svg>
-                      <span className="text-sm font-medium text-purple-800">Нормализация через {currentProvider.name}...</span>
+                      <span className="text-sm font-medium text-purple-800">Нормализация через NordRouter...</span>
                     </div>
-                    <button
-                      onClick={handleCancelNormalization}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 transition-colors"
-                    >
+                    <button onClick={handleCancelNormalization}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 transition-colors">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                       </svg>
@@ -672,7 +661,7 @@ function App() {
 
       <footer className="bg-white border-t border-gray-200 px-4 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <p>Данные локально • LLM: {currentProvider.name} {currentProvider.free ? '(бесплатно)' : '(платно)'}</p>
+          <p>Данные локально • LLM через <a href="https://nordrouter.com" target="_blank" rel="noopener" className="text-purple-600 hover:underline">NordRouter</a></p>
           <p>Excel • TXT • CSV</p>
         </div>
       </footer>
@@ -685,68 +674,37 @@ function App() {
 // ============================================================
 
 function SettingsPanel({ settings, onSave, onClearCache, cacheSize }: {
-  settings: { provider: LLMProvider; apiKey: string; model: string };
-  onSave: (s: { provider: LLMProvider; apiKey: string; model: string }) => void;
+  settings: LLMSettings;
+  onSave: (s: LLMSettings) => void;
   onClearCache: () => void;
   cacheSize: number;
 }) {
-  const [provider, setProvider] = useState<LLMProvider>(settings.provider);
   const [apiKey, setApiKey] = useState(settings.apiKey);
   const [model, setModel] = useState(settings.model);
-
-  const currentProvider = PROVIDERS.find(p => p.id === provider)!;
-
-  const handleProviderChange = (newProvider: LLMProvider) => {
-    setProvider(newProvider);
-    const config = PROVIDERS.find(p => p.id === newProvider)!;
-    setModel(config.defaultModel);
-  };
 
   return (
     <div className="bg-white border-b border-gray-200 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-        {/* Provider selection */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Провайдер LLM</label>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-            {PROVIDERS.map(p => (
-              <button key={p.id} onClick={() => handleProviderChange(p.id)}
-                className={`p-3 rounded-lg border text-left transition-all ${
-                  provider === p.id
-                    ? 'border-purple-400 bg-purple-50 ring-1 ring-purple-400'
-                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                }`}>
-                <div className="flex items-center gap-1.5 mb-1">
-                  <span className="text-sm font-semibold text-gray-800">{p.name}</span>
-                  {p.free && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-medium">FREE</span>}
-                </div>
-                <p className="text-[11px] text-gray-500 leading-tight">{p.description}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div className="flex items-start gap-4 flex-wrap">
           {/* API Key */}
-          <div className="flex-1 min-w-[250px]">
-            <label className="block text-sm font-medium text-gray-700 mb-1">API ключ</label>
+          <div className="flex-1 min-w-[280px]">
+            <label className="block text-sm font-medium text-gray-700 mb-1">NordRouter API ключ</label>
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-              placeholder={provider === 'groq' ? 'gsk_...' : provider === 'gemini' ? 'AIza...' : 'sk-...'}
+              placeholder="sk-nr-..."
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
             <p className="text-xs text-gray-500 mt-1">
-              Получить: <a href={currentProvider.apiKeyUrl} target="_blank" rel="noopener" className="text-purple-600 hover:underline">{currentProvider.apiKeyUrl}</a>
+              Получить: <a href="https://nordrouter.com/dashboard/" target="_blank" rel="noopener" className="text-purple-600 hover:underline">nordrouter.com/dashboard</a>
             </p>
-            <p className="text-xs text-gray-400 mt-0.5">{currentProvider.freeDetails}</p>
           </div>
 
           {/* Model */}
-          <div className="min-w-[200px]">
+          <div className="min-w-[250px]">
             <label className="block text-sm font-medium text-gray-700 mb-1">Модель</label>
             <select value={model} onChange={(e) => setModel(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
-              {currentProvider.models.map(m => (
+              {MODELS.map(m => (
                 <option key={m.id} value={m.id}>
-                  {m.name} {m.note ? `(${m.note})` : ''}
+                  {m.name} {m.note ? `— ${m.note}` : ''} ({m.priceNote})
                 </option>
               ))}
             </select>
@@ -754,7 +712,7 @@ function SettingsPanel({ settings, onSave, onClearCache, cacheSize }: {
 
           {/* Actions */}
           <div className="flex items-end gap-2">
-            <button onClick={() => onSave({ provider, apiKey, model })}
+            <button onClick={() => onSave({ apiKey, model })}
               className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors">
               Сохранить
             </button>
