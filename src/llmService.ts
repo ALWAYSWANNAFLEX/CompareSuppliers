@@ -1,6 +1,6 @@
 /**
  * Сервис для стандартизации названий товаров через NordRouter API
- * NordRouter — OpenAI-совместимый API роутер (nordrouter.com)
+ * NordRouter — OpenAI-совместимый API роутер (nordrouter.net)
  */
 
 // ============================================================
@@ -43,12 +43,16 @@ export function getSettings(): LLMSettings {
     const saved = localStorage.getItem(SETTINGS_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Миграция со старых форматов
-      if (parsed.apiKey !== undefined) {
-        return { apiKey: parsed.apiKey || '', model: parsed.model || DEFAULT_MODEL };
+      const apiKey = parsed.apiKey || '';
+      const model = parsed.model || DEFAULT_MODEL;
+      
+      // Валидация модели — если сохранена старая/невалидная, сбрасываем
+      const modelExists = MODELS.some(m => m.id === model);
+      if (modelExists) {
+        return { apiKey, model };
       }
-      // Старый формат с provider
-      return { apiKey: parsed.apiKey || '', model: parsed.model || DEFAULT_MODEL };
+      // Модель невалидна — сбрасываем на дефолтную
+      return { apiKey, model: DEFAULT_MODEL };
     }
   } catch { /* ignore */ }
   return { apiKey: '', model: DEFAULT_MODEL };
@@ -117,7 +121,7 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Вызов NordRouter API (OpenAI-совместимый)
- * Base URL: https://nordrouter.com/v1
+ * Base URL: https://nordrouter.net/v1
  * С retry при 429 ошибке
  */
 async function callNordRouter(
@@ -131,7 +135,7 @@ async function callNordRouter(
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch('https://nordrouter.com/v1/chat/completions', {
+      const response = await fetch('https://nordrouter.net/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
