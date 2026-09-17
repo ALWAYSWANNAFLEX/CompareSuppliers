@@ -3,7 +3,8 @@ import { Supplier, ProductComparison } from './types';
 import { parsePriceText, parseExcelFile, entriesToPlainText, findMinPrice, exportToCSV } from './parser';
 import {
   getSettings, saveSettings, PROVIDERS, LLMProvider,
-  normalizeNamesBatch, clearNormalizationCache, getCacheSize
+  normalizeNamesBatch, clearNormalizationCache, getCacheSize,
+  NormalizationStats
 } from './llmService';
 
 function generateId(): string {
@@ -129,7 +130,10 @@ function App() {
     suppliers.find(s => s.id === selectedSupplierId), [suppliers, selectedSupplierId]
   );
 
-  // Comparison table
+  // Comparison table — используем нормализацию если она есть в map
+  const hasAnyNormalization = Object.keys(normalizedMap).length > 0;
+  const effectiveLLM = useLLM && hasAnyNormalization;
+
   const comparisonData = useMemo<ProductComparison[]>(() => {
     if (suppliers.length === 0) return [];
     const allProducts = new Map<string, ProductComparison>();
@@ -137,11 +141,13 @@ function App() {
     for (const supplier of suppliers) {
       const entries = parsePriceText(supplier.priceText);
       for (const entry of entries) {
-        const key = useLLM && normalizedMap[entry.productName]
-          ? normalizedMap[entry.productName].toLowerCase().trim()
-          : entry.productName.toLowerCase().trim();
-        const displayName = useLLM && normalizedMap[entry.productName]
-          ? normalizedMap[entry.productName] : entry.productName;
+        // Используем нормализованное имя если оно есть и отличается от оригинала
+        const norm = normalizedMap[entry.productName];
+        const useNorm = effectiveLLM && norm && norm.toLowerCase().trim() !== entry.productName.toLowerCase().trim();
+        
+        const key = useNorm ? norm.toLowerCase().trim() : entry.productName.toLowerCase().trim();
+        const displayName = useNorm ? norm : entry.productName;
+        
         if (!allProducts.has(key)) {
           allProducts.set(key, { productName: displayName, prices: {} });
         }
@@ -149,7 +155,7 @@ function App() {
       }
     }
     return Array.from(allProducts.values()).sort((a, b) => a.productName.localeCompare(b.productName, 'ru'));
-  }, [suppliers, useLLM, normalizedMap]);
+  }, [suppliers, effectiveLLM, normalizedMap]);
 
   const handleExportCSV = useCallback(() => {
     const csv = exportToCSV(comparisonData, suppliers);
@@ -164,6 +170,8 @@ function App() {
     if (!selectedSupplier) return [];
     return parsePriceText(selectedSupplier.priceText);
   }, [selectedSupplier]);
+
+  const [lastStats, setLastStats] = useState<NormalizationStats | null>(null);
 
   // LLM Normalization
   const handleNormalize = useCallback(async () => {
@@ -180,36 +188,40 @@ function App() {
     setIsNormalizing(true);
     setNormalizationProgress({ current: 0, total: 0 });
 
-    try {
-      const allNames = new Set<string>();
-      for (const supplier of suppliers) {
-        const entries = parsePriceText(supplier.priceText);
-        for (const entry of entries) allNames.add(entry.productName);
-      }
-
-      const namesArray = Array.from(allNames);
-      setNormalizationProgress({ current: 0, total: namesArray.length });
-
-      const results = await normalizeNamesBatch(
-        namesArray,
-        (current: number, total: number) => setNormalizationProgress({ current, total })
-      );
-
-      const newMap: Record<string, string> = {};
-      results.forEach((normalized, original) => { newMap[original] = normalized; });
-      
-      const mergedMap = { ...normalizedMap, ...newMap };
-      setNormalizedMap(mergedMap);
-      localStorage.setItem('normalized_map', JSON.stringify(mergedMap));
-      setUseLLM(true);
-      setCacheSize(getCacheSize());
-      showMessage('success', `Нормализовано ${namesArray.length} названий`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Неизвестная ошибка';
-      showMessage('error', `Ошибка: ${message}`);
-    } finally {
-      setIsNormalizing(false);
+    const allNames = new Set<string>();
+    for (const supplier of suppliers) {
+      const entries = parsePriceText(supplier.priceText);
+      for (const entry of entries) allNames.add(entry.productName);
     }
+
+    const namesArray = Array.from(allNames);
+    setNormalizationProgress({ current: 0, total: namesArray.length });
+
+    // normalizeNamesBatch НИКОГДА не выбрасывает — всегда возвращает частичный результат
+    const { map, stats } = await normalizeNamesBatch(
+      namesArray,
+      (current: number, total: number) => setNormalizationProgress({ current, total })
+    );
+
+    const newMap: Record<string, string> = {};
+    map.forEach((normalized: string, original: string) => { newMap[original] = normalized; });
+    
+    const mergedMap = { ...normalizedMap, ...newMap };
+    setNormalizedMap(mergedMap);
+    localStorage.setItem('normalized_map', JSON.stringify(mergedMap));
+    setUseLLM(true);
+    setCacheSize(getCacheSize());
+    setLastStats(stats);
+
+    if (stats.failed > 0 && stats.normalized === 0) {
+      showMessage('error', `Не удалось нормализовать. Проверьте API ключ и попробуйте другой провайдер.`);
+    } else if (stats.failed > 0) {
+      showMessage('success', `✓ ${stats.normalized} нормализовано, ${stats.failed} не удалось (rate limit)`);
+    } else {
+      showMessage('success', `✓ Нормализовано ${stats.normalized} названий (${stats.fromCache} из кэша)`);
+    }
+
+    setIsNormalizing(false);
   }, [settings.apiKey, suppliers, normalizedMap, showMessage]);
 
   const handleSaveSettings = useCallback((newSettings: typeof settings) => {
@@ -231,12 +243,12 @@ function App() {
   }, [showMessage]);
 
   const handleToggleLLM = useCallback(() => {
-    if (!useLLM && Object.keys(normalizedMap).length === 0) {
+    if (!useLLM && !hasAnyNormalization) {
       showMessage('error', 'Сначала запустите нормализацию');
       return;
     }
     setUseLLM(!useLLM);
-  }, [useLLM, normalizedMap, showMessage]);
+  }, [useLLM, hasAnyNormalization, showMessage]);
 
   const totalProducts = useMemo(() => {
     const names = new Set<string>();
@@ -267,15 +279,15 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              {Object.keys(normalizedMap).length > 0 && (
+              {hasAnyNormalization && (
                 <button onClick={handleToggleLLM}
                   className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors border ${
-                    useLLM ? 'bg-purple-50 border-purple-300 text-purple-700' : 'bg-gray-50 border-gray-300 text-gray-600 hover:bg-gray-100'
+                    effectiveLLM ? 'bg-purple-50 border-purple-300 text-purple-700' : 'bg-gray-50 border-gray-300 text-gray-600 hover:bg-gray-100'
                   }`}>
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                   </svg>
-                  {useLLM ? 'LLM: ВКЛ' : 'LLM: ВЫКЛ'}
+                  {effectiveLLM ? 'LLM: ВКЛ' : 'LLM: ВЫКЛ'}
                 </button>
               )}
               <button onClick={handleNormalize} disabled={isNormalizing || suppliers.length === 0}
@@ -399,7 +411,7 @@ function App() {
             </div>
           )}
 
-          {Object.keys(normalizedMap).length > 0 && (
+          {hasAnyNormalization && (
             <div className="mt-4 p-3 bg-purple-50 rounded-lg border border-purple-200">
               <div className="flex items-center gap-2 mb-1">
                 <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -408,7 +420,10 @@ function App() {
                 <span className="text-xs font-medium text-purple-700">LLM нормализация</span>
               </div>
               <p className="text-xs text-purple-600">{Object.keys(normalizedMap).length} названий в кэше</p>
-              {useLLM && <p className="text-xs text-purple-500 mt-1">✓ Активна — товары группируются</p>}
+              {effectiveLLM && <p className="text-xs text-purple-500 mt-1">✓ Активна — товары группируются</p>}
+              {lastStats && lastStats.failed > 0 && (
+                <p className="text-xs text-amber-600 mt-1">⚠ {lastStats.failed} не нормализовано (rate limit)</p>
+              )}
             </div>
           )}
         </aside>
@@ -491,21 +506,24 @@ function App() {
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
                           <th className="text-left px-5 py-2 text-gray-600 font-medium w-12">№</th>
-                          <th className="text-left px-5 py-2 text-gray-600 font-medium">Наименование</th>
-                          {useLLM && <th className="text-left px-5 py-2 text-purple-600 font-medium">→ Нормализованное</th>}
+                          <th className="text-left px-5 py-2 text-gray-600 font-medium">Оригинал</th>
+                          {Object.keys(normalizedMap).length > 0 && (
+                            <th className="text-left px-5 py-2 text-purple-600 font-medium">→ Стандарт</th>
+                          )}
                           <th className="text-right px-5 py-2 text-gray-600 font-medium w-32">Цена</th>
                         </tr>
                       </thead>
                       <tbody>
                         {selectedSupplierEntries.map((entry, idx) => {
-                          const normalized = useLLM ? normalizedMap[entry.productName] : null;
+                          const normalized = normalizedMap[entry.productName];
+                          const hasNorm = normalized && normalized.toLowerCase().trim() !== entry.productName.toLowerCase().trim();
                           return (
                             <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
                               <td className="px-5 py-2 text-gray-400 text-xs">{idx + 1}</td>
                               <td className="px-5 py-2 text-gray-800">{entry.productName}</td>
-                              {useLLM && (
-                                <td className="px-5 py-2 text-purple-700 text-xs">
-                                  {normalized && normalized !== entry.productName ? normalized : '—'}
+                              {Object.keys(normalizedMap).length > 0 && (
+                                <td className={`px-5 py-2 text-xs ${hasNorm ? 'text-purple-700 font-medium' : 'text-gray-400'}`}>
+                                  {hasNorm ? normalized : '—'}
                                 </td>
                               )}
                               <td className="px-5 py-2 text-right font-medium text-gray-800">
@@ -516,6 +534,19 @@ function App() {
                         })}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Stats after normalization */}
+              {lastStats && !isNormalizing && (
+                <div className={`rounded-xl p-4 border ${lastStats.failed > 0 && lastStats.normalized === 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="font-medium">Результат:</span>
+                    <span className="text-green-700">✓ {lastStats.normalized} нормализовано</span>
+                    {lastStats.fromCache > 0 && <span className="text-gray-500">({lastStats.fromCache} из кэша)</span>}
+                    {lastStats.failed > 0 && <span className="text-red-600">✗ {lastStats.failed} не удалось (rate limit)</span>}
+                    <button onClick={() => setLastStats(null)} className="ml-auto text-gray-400 hover:text-gray-600 text-xs">✕</button>
                   </div>
                 </div>
               )}
@@ -544,14 +575,17 @@ function App() {
                   <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold text-gray-800 text-sm">
-                        {useLLM ? 'Сравнительная таблица (LLM)' : 'Сравнительная таблица'}
+                        {effectiveLLM ? 'Сравнительная таблица (LLM)' : 'Сравнительная таблица'}
                       </h3>
-                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{comparisonData.length} {useLLM ? 'уник.' : 'позиций'}</span>
+                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{comparisonData.length} {effectiveLLM ? 'уник.' : 'позиций'}</span>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-gray-500">
                       <span className="flex items-center gap-1"><span className="inline-block w-4 h-4 bg-green-100 border border-green-300 rounded-sm"></span>Лучшая цена</span>
-                      {!useLLM && totalProducts !== comparisonData.length && (
-                        <span className="text-purple-600">💡 Включите LLM ({totalProducts} → {comparisonData.length})</span>
+                      {!effectiveLLM && hasAnyNormalization && (
+                        <button onClick={() => setUseLLM(true)} className="text-purple-600 hover:underline">💡 Включите LLM для группировки</button>
+                      )}
+                      {!hasAnyNormalization && (
+                        <span className="text-purple-600">💡 Нажмите «Нормализовать» для объединения одинаковых товаров</span>
                       )}
                     </div>
                   </div>

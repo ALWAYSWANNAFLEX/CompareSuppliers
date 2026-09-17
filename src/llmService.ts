@@ -165,36 +165,43 @@ export function getCacheSize(): number {
 // ============================================================
 
 const SYSTEM_PROMPT = `Ты — эксперт по стандартизации названий товаров (электроника, смартфоны, планшеты).
-Твоя задача — привести название товара к единому стандартному формату через слэш.
+Твоя задача — привести название товара к единому стандартному формату.
 
 Формат вывода:
-[Фирма]/[Модель]/[Оперативная память]/[Встроенная память (если есть)]/[Код региона]
+[Бренд] [Модель] [ОЗУ]/[Встроенная память] [Цвет]
 
 Правила:
-1. Фирма — латиницей как официально (Samsung, Apple, Xiaomi, Realme, Poco и т.д.)
+1. Бренд — латиницей как официально (Samsung, Apple, Xiaomi, Realme, Poco и т.д.)
 2. Модель — как в официальном каталоге (Galaxy A17, iPhone 15 Pro, Redmi Note 13 и т.д.)
-3. Оперативная память — в ГБ, числом (4, 6, 8, 12 и т.д.)
-4. Встроенная память — в ГБ, числом (128, 256, 512 и т.д.). Если не указана — пропусти этот блок.
-5. Код региона/цвет/вариант — ОСТАВЬ КАК ЕСТЬ (латиницей), не переводи. (Gray, Black, Natural Titanium, SEA, EAC и т.д.)
-6. Разделитель между блоками — слэш /
-7. Убери мусор: внутренние артикулы (SM-A175F, M2101K7AI и т.п.), слова "новый", "оригинал", "global version" и т.п.
+3. ОЗУ и встроенная память — числом через слэш (4/128, 8/256). Если встроенная память не указана — пиши только ОЗУ.
+4. Цвет — ОСТАВЬ КАК ЕСТЬ (латиницей), не переводи (Gray, Black, Natural Titanium и т.д.)
+5. Разделитель: пробел между блоками, слэш только между ОЗУ и памятью
+6. Убери мусор: внутренние артикулы (SM-A175F, M2101K7AI и т.п.), слова "новый", "оригинал", "global version" и т.п.
 
 Примеры:
-- "Samsung-A17-4/128-Gray" → "Samsung/Galaxy A17/4/128/Gray"
-- "Самсунг А 17 4+128 серый" → "Samsung/Galaxy A17/4/128/Gray"
-- "SM-A175F/DS 4+128 Black" → "Samsung/Galaxy A17/4/128/Black"
-- "IPHONE 15 PRO MAX 256GB NATURAL TITANIUM" → "Apple/iPhone 15 Pro Max/8/256/Natural Titanium"
-- "Xiaomi Redmi Note 13 8/256 Midnight Black" → "Xiaomi/Redmi Note 13/8/256/Midnight Black"
-- "Realme C55 6/128 Sunshower" → "Realme/C55/6/128/Sunshower"
-- "Poco X6 Pro 8/256" → "Poco/X6 Pro/8/256"
-- "Samsung A15 4/64 Blue" → "Samsung/Galaxy A15/4/64/Blue"`;
+- "Samsung-A17-4/128-Gray" → "Samsung Galaxy A17 4/128 Gray"
+- "Самсунг А 17 4+128 серый" → "Samsung Galaxy A17 4/128 Gray"
+- "SM-A175F/DS 4+128 Black" → "Samsung Galaxy A17 4/128 Black"
+- "IPHONE 15 PRO MAX 256GB NATURAL TITANIUM" → "Apple iPhone 15 Pro Max 8/256 Natural Titanium"
+- "Xiaomi Redmi Note 13 8/256 Midnight Black" → "Xiaomi Redmi Note 13 8/256 Midnight Black"
+- "Realme C55 6/128 Sunshower" → "Realme C55 6/128 Sunshower"
+- "Poco X6 Pro 8/256" → "Poco X6 Pro 8/256"
+- "Samsung A15 4/64 Blue" → "Samsung Galaxy A15 4/64 Blue"`;
 
 // ============================================================
 //  API CALLS
 // ============================================================
 
 /**
+ * Задержка
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
  * Вызов через OpenAI-совместимый API (Groq, OpenRouter, DeepSeek, OpenAI)
+ * С retry при 429 ошибке
  */
 async function callOpenAICompatible(
   baseUrl: string,
@@ -203,32 +210,56 @@ async function callOpenAICompatible(
   messages: { role: string; content: string }[],
   signal?: AbortSignal
 ): Promise<string> {
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.1,
-      max_tokens: 1000,
-    }),
-    signal,
-  });
+  const MAX_RETRIES = 5;
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `API error: ${response.status}`);
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.1,
+          max_tokens: 1000,
+        }),
+        signal,
+      });
+
+      if (response.status === 429) {
+        // Rate limit — ждём и повторяем
+        const retryAfter = response.headers.get('retry-after');
+        const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 2000;
+        await sleep(Math.min(waitMs, 30000));
+        continue;
+      }
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error?.message || `API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content?.trim() || '';
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      lastError = err instanceof Error ? err : new Error(String(err));
+      
+      if (attempt < MAX_RETRIES - 1) {
+        await sleep(Math.pow(2, attempt) * 2000);
+      }
+    }
   }
 
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content?.trim() || '';
+  throw lastError || new Error('Max retries exceeded');
 }
 
 /**
- * Вызов через Google Gemini API
+ * Вызов через Google Gemini API с retry
  */
 async function callGemini(
   apiKey: string,
@@ -236,32 +267,54 @@ async function callGemini(
   prompt: string,
   signal?: AbortSignal
 ): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const MAX_RETRIES = 5;
+  let lastError: Error | null = null;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [{
-          text: `${SYSTEM_PROMPT}\n\n${prompt}`
-        }]
-      }],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 1000,
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `${SYSTEM_PROMPT}\n\n${prompt}`
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 1000,
+          }
+        }),
+        signal,
+      });
+
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 3000;
+        await sleep(Math.min(waitMs, 30000));
+        continue;
       }
-    }),
-    signal,
-  });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Gemini API error: ${response.status}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error?.message || `Gemini API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < MAX_RETRIES - 1) {
+        await sleep(Math.pow(2, attempt) * 3000);
+      }
+    }
   }
 
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+  throw lastError || new Error('Max retries exceeded');
 }
 
 /**
@@ -309,7 +362,7 @@ async function normalizeBatch(
   signal?: AbortSignal
 ): Promise<string[]> {
   const numbered = names.map((n, i) => `${i + 1}. ${n}`).join('\n');
-  const userMessage = `Нормализуй следующие названия товаров. Верни ТОЛЬКО JSON массив нормализованных названий в том же порядке, без пояснений. Пример ответа: ["Samsung/Galaxy A17/4/128/Gray", "Apple/iPhone 15/8/128/Black"]\n\nНазвания:\n${numbered}`;
+  const userMessage = `Нормализуй следующие названия товаров. Верни ТОЛЬКО JSON массив нормализованных названий в том же порядке, без пояснений. Пример ответа: ["Samsung Galaxy A17 4/128 Gray", "Apple iPhone 15 8/128 Black"]\n\nНазвания:\n${numbered}`;
 
   const content = await callLLM(provider, apiKey, model, userMessage, signal);
 
@@ -333,22 +386,40 @@ async function normalizeBatch(
   return names; // Фолбэк
 }
 
+export interface NormalizationStats {
+  total: number;
+  fromCache: number;
+  normalized: number;
+  failed: number;
+}
+
+export interface NormalizationResult {
+  map: Map<string, string>;
+  stats: NormalizationStats;
+}
+
 /**
- * Главная функция: нормализует все названия
+ * Главная функция: нормализует все названия.
+ * НИКОГДА не выбрасывает ошибку — всегда возвращает частичный результат.
  */
 export async function normalizeNamesBatch(
   names: string[],
   onProgress?: (current: number, total: number) => void,
   signal?: AbortSignal
-): Promise<Map<string, string>> {
+): Promise<NormalizationResult> {
   const settings = getSettings();
   const { provider, apiKey, model } = settings;
 
+  const results = new Map<string, string>();
+  const stats: NormalizationStats = { total: names.length, fromCache: 0, normalized: 0, failed: 0 };
+
   if (!apiKey) {
-    throw new Error('API ключ не указан. Откройте настройки и укажите ключ.');
+    // Без ключа — возвращаем оригиналы
+    for (const name of names) results.set(name, name);
+    stats.failed = names.length;
+    return { map: results, stats };
   }
 
-  const results = new Map<string, string>();
   const cache = getCache();
 
   // Проверяем кэш
@@ -356,7 +427,13 @@ export async function normalizeNamesBatch(
   for (const name of names) {
     const cacheKey = name.toLowerCase().trim();
     if (cache[cacheKey]) {
-      results.set(name, cache[cacheKey]);
+      const cached = cache[cacheKey];
+      results.set(name, cached);
+      // Считаем "нормализованным" только если отличается от оригинала
+      if (cached.toLowerCase().trim() !== name.toLowerCase().trim()) {
+        stats.fromCache++;
+        stats.normalized++;
+      }
     } else {
       toProcess.push(name);
     }
@@ -366,13 +443,25 @@ export async function normalizeNamesBatch(
     onProgress(names.length - toProcess.length, names.length);
   }
 
-  // Обрабатываем батчами
-  const BATCH_SIZE = provider === 'gemini' ? 5 : 10;
+  // Обрабатываем батчами (маленькими, чтобы не упираться в rate limit)
+  const BATCH_SIZE = provider === 'gemini' ? 3 : 5;
+  let consecutiveErrors = 0;
 
   for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
     if (signal?.aborted) break;
 
+    // Если 3 батча подряд упали — прекращаем, чтобы не тратить время
+    if (consecutiveErrors >= 3) {
+      // Остальные — как есть
+      for (let k = i; k < toProcess.length; k++) {
+        results.set(toProcess[k], toProcess[k]);
+        stats.failed++;
+      }
+      break;
+    }
+
     const batch = toProcess.slice(i, i + BATCH_SIZE);
+    let batchOk = false;
 
     try {
       const batchResults = await normalizeBatch(provider, apiKey, model, batch, signal);
@@ -381,13 +470,15 @@ export async function normalizeNamesBatch(
         const original = batch[j];
         const normalized = batchResults[j] || original;
         results.set(original, normalized);
-
-        // Кэш
         cache[original.toLowerCase().trim()] = normalized;
+        if (normalized.toLowerCase().trim() !== original.toLowerCase().trim()) {
+          stats.normalized++;
+        }
       }
-
       setCache(cache);
-    } catch (err) {
+      batchOk = true;
+      consecutiveErrors = 0;
+    } catch {
       // При ошибке батча — пробуем по одному
       for (const name of batch) {
         try {
@@ -396,12 +487,19 @@ export async function normalizeNamesBatch(
           const cleaned = result.replace(/^["']+|["']+$/g, '').trim();
           results.set(name, cleaned || name);
           cache[name.toLowerCase().trim()] = cleaned || name;
+          if (cleaned && cleaned.toLowerCase().trim() !== name.toLowerCase().trim()) {
+            stats.normalized++;
+          }
+          batchOk = true;
         } catch {
           results.set(name, name);
+          stats.failed++;
         }
       }
       setCache(cache);
     }
+
+    if (!batchOk) consecutiveErrors++;
 
     if (onProgress) {
       onProgress(
@@ -410,11 +508,12 @@ export async function normalizeNamesBatch(
       );
     }
 
-    // Пауза между батчами чтобы не превысить rate limit
+    // Пауза между батчами
     if (i + BATCH_SIZE < toProcess.length) {
-      await new Promise(resolve => setTimeout(resolve, provider === 'gemini' ? 1000 : 300));
+      const pauseMs = provider === 'gemini' ? 5000 : provider === 'openrouter' ? 4000 : 2500;
+      await sleep(pauseMs);
     }
   }
 
-  return results;
+  return { map: results, stats };
 }
