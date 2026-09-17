@@ -1,9 +1,20 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Supplier, ProductComparison } from './types';
 import { parsePriceText, parseExcelFile, entriesToPlainText, findMinPrice, exportToCSV } from './parser';
+import {
+  getApiKey, setApiKey, getModel, setModel,
+  normalizeNamesBatch, clearNormalizationCache, getCacheSize
+} from './llmService';
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
+
+// Маппинг: нормализованное название -> оригинальные названия от разных поставщиков
+interface NormalizedProduct {
+  normalizedName: string;
+  originals: Record<string, string>; // supplierId -> originalName
+  prices: Record<string, number | null>; // supplierId -> price
 }
 
 function App() {
@@ -17,6 +28,26 @@ function App() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // LLM settings
+  const [showSettings, setShowSettings] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState(getApiKey());
+  const [modelInput, setModelInput] = useState(getModel());
+  const [isNormalizing, setIsNormalizing] = useState(false);
+  const [normalizationProgress, setNormalizationProgress] = useState({ current: 0, total: 0 });
+  const [useLLM, setUseLLM] = useState(false);
+  const [normalizedMap, setNormalizedMap] = useState<Record<string, string>>({}); // original -> normalized
+  const [cacheSize, setCacheSize] = useState(getCacheSize());
+
+  // Восстанавливаем маппинг нормализации из localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('normalized_map');
+    if (saved) {
+      try {
+        setNormalizedMap(JSON.parse(saved));
+      } catch { /* ignore */ }
+    }
+  }, []);
 
   const saveSuppliers = useCallback((newSuppliers: Supplier[]) => {
     setSuppliers(newSuppliers);
@@ -56,7 +87,6 @@ function App() {
     setTimeout(() => setUploadMessage(null), 4000);
   }, []);
 
-  // Обработка загрузки файла
   const handleFileUpload = useCallback((file: File, targetSupplierId?: string) => {
     const targetId = targetSupplierId || selectedSupplierId;
     if (!targetId) {
@@ -77,10 +107,9 @@ function App() {
             updatePriceText(targetId, text);
             showMessage('success', `Загружено ${entries.length} позиций из "${file.name}"`);
           } else {
-            showMessage('error', 'Не удалось распознать данные в файле. Проверьте формат.');
+            showMessage('error', 'Не удалось распознать данные в файле.');
           }
-        } catch (err) {
-          console.error('Error parsing Excel:', err);
+        } catch {
           showMessage('error', 'Ошибка при чтении файла.');
         }
       };
@@ -99,33 +128,19 @@ function App() {
     }
   }, [selectedSupplierId, updatePriceText, showMessage]);
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-  }, []);
-
+  const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); }, []);
+  const handleDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(false); }, []);
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
     const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) {
-      handleFileUpload(files[0]);
-    }
+    if (files.length > 0) handleFileUpload(files[0]);
   }, [handleFileUpload]);
 
   const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    if (files.length > 0) {
-      handleFileUpload(files[0]);
-    }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    if (files.length > 0) handleFileUpload(files[0]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   }, [handleFileUpload]);
 
   const selectedSupplier = useMemo(() => 
@@ -133,6 +148,7 @@ function App() {
     [suppliers, selectedSupplierId]
   );
 
+  // Сравнительная таблица — с учётом нормализации
   const comparisonData = useMemo<ProductComparison[]>(() => {
     if (suppliers.length === 0) return [];
     const allProducts = new Map<string, ProductComparison>();
@@ -140,9 +156,17 @@ function App() {
     for (const supplier of suppliers) {
       const entries = parsePriceText(supplier.priceText);
       for (const entry of entries) {
-        const key = entry.productName.toLowerCase().trim();
+        // Если включена нормализация — используем нормализованное имя
+        const key = useLLM && normalizedMap[entry.productName]
+          ? normalizedMap[entry.productName].toLowerCase().trim()
+          : entry.productName.toLowerCase().trim();
+        
+        const displayName = useLLM && normalizedMap[entry.productName]
+          ? normalizedMap[entry.productName]
+          : entry.productName;
+
         if (!allProducts.has(key)) {
-          allProducts.set(key, { productName: entry.productName, prices: {} });
+          allProducts.set(key, { productName: displayName, prices: {} });
         }
         allProducts.get(key)!.prices[supplier.id] = entry.price;
       }
@@ -151,7 +175,7 @@ function App() {
     return Array.from(allProducts.values()).sort((a, b) => 
       a.productName.localeCompare(b.productName, 'ru')
     );
-  }, [suppliers]);
+  }, [suppliers, useLLM, normalizedMap]);
 
   const handleExportCSV = useCallback(() => {
     const csv = exportToCSV(comparisonData, suppliers);
@@ -169,12 +193,106 @@ function App() {
     return parsePriceText(selectedSupplier.priceText);
   }, [selectedSupplier]);
 
+  // Нормализация через LLM
+  const handleNormalize = useCallback(async () => {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      showMessage('error', 'Укажите API ключ OpenAI в настройках');
+      setShowSettings(true);
+      return;
+    }
+
+    if (suppliers.length === 0) {
+      showMessage('error', 'Добавьте поставщиков с прайсами');
+      return;
+    }
+
+    setIsNormalizing(true);
+    setNormalizationProgress({ current: 0, total: 0 });
+
+    try {
+      // Собираем все уникальные названия
+      const allNames = new Set<string>();
+      for (const supplier of suppliers) {
+        const entries = parsePriceText(supplier.priceText);
+        for (const entry of entries) {
+          allNames.add(entry.productName);
+        }
+      }
+
+      const namesArray = Array.from(allNames);
+      setNormalizationProgress({ current: 0, total: namesArray.length });
+
+      const results = await normalizeNamesBatch(
+        namesArray,
+        apiKey,
+        getModel(),
+        (current, total) => setNormalizationProgress({ current, total })
+      );
+
+      // Сохраняем результат
+      const newMap: Record<string, string> = {};
+      results.forEach((normalized, original) => {
+        newMap[original] = normalized;
+      });
+      
+      const mergedMap = { ...normalizedMap, ...newMap };
+      setNormalizedMap(mergedMap);
+      localStorage.setItem('normalized_map', JSON.stringify(mergedMap));
+      setUseLLM(true);
+      setCacheSize(getCacheSize());
+      
+      showMessage('success', `Нормализовано ${namesArray.length} названий`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Неизвестная ошибка';
+      showMessage('error', `Ошибка нормализации: ${message}`);
+    } finally {
+      setIsNormalizing(false);
+    }
+  }, [suppliers, normalizedMap, showMessage]);
+
+  const handleSaveSettings = useCallback(() => {
+    setApiKey(apiKeyInput);
+    setModel(modelInput);
+    setCacheSize(getCacheSize());
+    setShowSettings(false);
+    showMessage('success', 'Настройки сохранены');
+  }, [apiKeyInput, modelInput, showMessage]);
+
+  const handleClearCache = useCallback(() => {
+    if (confirm('Очистить кэш нормализации? Все названия будут обработаны заново.')) {
+      clearNormalizationCache();
+      setNormalizedMap({});
+      localStorage.removeItem('normalized_map');
+      setCacheSize(0);
+      showMessage('success', 'Кэш очищен');
+    }
+  }, [showMessage]);
+
+  const handleToggleLLM = useCallback(() => {
+    if (!useLLM && Object.keys(normalizedMap).length === 0) {
+      showMessage('error', 'Сначала запустите нормализацию');
+      return;
+    }
+    setUseLLM(!useLLM);
+  }, [useLLM, normalizedMap, showMessage]);
+
+  // Подсчёт общих товаров
+  const totalProducts = useMemo(() => {
+    const names = new Set<string>();
+    for (const supplier of suppliers) {
+      const entries = parsePriceText(supplier.priceText);
+      for (const entry of entries) names.add(entry.productName);
+    }
+    return names.size;
+  }, [suppliers]);
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -186,27 +304,133 @@ function App() {
                 <p className="text-sm text-gray-500">Анализ цен от нескольких поставщиков</p>
               </div>
             </div>
-            {comparisonData.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* LLM Toggle */}
+              {Object.keys(normalizedMap).length > 0 && (
+                <button
+                  onClick={handleToggleLLM}
+                  className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors border ${
+                    useLLM
+                      ? 'bg-purple-50 border-purple-300 text-purple-700'
+                      : 'bg-gray-50 border-gray-300 text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  </svg>
+                  {useLLM ? 'LLM: ВКЛ' : 'LLM: ВЫКЛ'}
+                </button>
+              )}
+              {/* Normalize button */}
               <button
-                onClick={handleExportCSV}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-sm"
+                onClick={handleNormalize}
+                disabled={isNormalizing || suppliers.length === 0}
+                className="flex items-center gap-2 px-3 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isNormalizing ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    {normalizationProgress.current}/{normalizationProgress.total}
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    Нормализовать (LLM)
+                  </>
+                )}
+              </button>
+              {/* Settings */}
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                Экспорт в CSV
+                Настройки
               </button>
-            )}
+              {/* Export */}
+              {comparisonData.length > 0 && (
+                <button
+                  onClick={handleExportCSV}
+                  className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  CSV
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
 
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="bg-white border-b border-gray-200 shadow-sm">
+          <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
+            <div className="flex items-start gap-6 flex-wrap">
+              <div className="flex-1 min-w-[250px]">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  OpenAI API Key
+                </label>
+                <input
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder="sk-..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Получите ключ на <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" className="text-purple-600 hover:underline">platform.openai.com</a>
+                </p>
+              </div>
+              <div className="min-w-[200px]">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Модель
+                </label>
+                <select
+                  value={modelInput}
+                  onChange={(e) => setModelInput(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="gpt-4o-mini">GPT-4o Mini (дешевле)</option>
+                  <option value="gpt-4o">GPT-4o (точнее)</option>
+                  <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                  <option value="gpt-4.1-nano">GPT-4.1 Nano (самый дешёвый)</option>
+                </select>
+              </div>
+              <div className="flex items-end gap-2">
+                <button
+                  onClick={handleSaveSettings}
+                  className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors"
+                >
+                  Сохранить
+                </button>
+                <button
+                  onClick={handleClearCache}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 text-sm rounded-lg hover:bg-gray-200 transition-colors"
+                  title={`Кэш: ${cacheSize} записей`}
+                >
+                  Очистить кэш ({cacheSize})
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Upload notification */}
       {uploadMessage && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-fade-in ${
-          uploadMessage.type === 'success' 
-            ? 'bg-green-500 text-white' 
-            : 'bg-red-500 text-white'
+          uploadMessage.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
         }`}>
           {uploadMessage.type === 'success' ? (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -248,12 +472,8 @@ function App() {
                 autoFocus
               />
               <div className="flex gap-2">
-                <button onClick={addSupplier} className="flex-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors">
-                  Добавить
-                </button>
-                <button onClick={() => { setShowAddForm(false); setNewSupplierName(''); }} className="flex-1 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-md hover:bg-gray-300 transition-colors">
-                  Отмена
-                </button>
+                <button onClick={addSupplier} className="flex-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors">Добавить</button>
+                <button onClick={() => { setShowAddForm(false); setNewSupplierName(''); }} className="flex-1 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-md hover:bg-gray-300 transition-colors">Отмена</button>
               </div>
             </div>
           )}
@@ -297,6 +517,24 @@ function App() {
               })}
             </div>
           )}
+
+          {/* LLM Status */}
+          {Object.keys(normalizedMap).length > 0 && (
+            <div className="mt-4 p-3 bg-purple-50 rounded-lg border border-purple-200">
+              <div className="flex items-center gap-2 mb-1">
+                <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+                <span className="text-xs font-medium text-purple-700">LLM нормализация</span>
+              </div>
+              <p className="text-xs text-purple-600">
+                {Object.keys(normalizedMap).length} названий в кэше
+              </p>
+              {useLLM && (
+                <p className="text-xs text-purple-500 mt-1">✓ Активна — товары группируются</p>
+              )}
+            </div>
+          )}
         </aside>
 
         {/* Main Content */}
@@ -310,7 +548,8 @@ function App() {
               </div>
               <h3 className="text-lg font-semibold text-gray-700 mb-2">Начните работу</h3>
               <p className="text-gray-500 max-w-md mb-6">
-                Добавьте поставщиков, загрузите их прайс-листы (Excel или текст), и система автоматически сравнит цены.
+                Добавьте поставщиков, загрузите прайс-листы (Excel или текст). 
+                Используйте LLM-нормализацию для объединения одинаковых товаров от разных поставщиков.
               </p>
               <button
                 onClick={() => setShowAddForm(true)}
@@ -321,20 +560,17 @@ function App() {
             </div>
           ) : selectedSupplier ? (
             <div className="space-y-5">
-              {/* ===== ЗОНА ЗАГРУЗКИ ФАЙЛОВ ===== */}
+              {/* Upload zone */}
               <div
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 className={`relative bg-white rounded-xl border-2 border-dashed transition-all overflow-hidden ${
-                  isDragOver
-                    ? 'border-blue-500 bg-blue-50 shadow-md scale-[1.01]'
-                    : 'border-gray-300 hover:border-blue-300 hover:bg-blue-50/30'
+                  isDragOver ? 'border-blue-500 bg-blue-50 shadow-md' : 'border-gray-300 hover:border-blue-300'
                 }`}
               >
                 <div className="p-6">
                   <div className="flex flex-col sm:flex-row items-center gap-4">
-                    {/* Иконка загрузки */}
                     <div className={`w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
                       isDragOver ? 'bg-blue-100' : 'bg-gradient-to-br from-blue-50 to-indigo-100'
                     }`}>
@@ -342,15 +578,11 @@ function App() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                       </svg>
                     </div>
-                    
-                    {/* Текст и кнопка */}
                     <div className="flex-1 text-center sm:text-left">
                       <h3 className="text-base font-semibold text-gray-800 mb-1">
-                        {isDragOver ? '📂 Отпустите файл для загрузки' : `Загрузите прайс для «${selectedSupplier.name}»`}
+                        {isDragOver ? '📂 Отпустите файл' : `Загрузите прайс для «${selectedSupplier.name}»`}
                       </h3>
-                      <p className="text-sm text-gray-500 mb-3">
-                        Перетащите файл сюда или нажмите кнопку ниже
-                      </p>
+                      <p className="text-sm text-gray-500 mb-3">Перетащите файл или нажмите кнопку</p>
                       <div className="flex flex-wrap items-center gap-3">
                         <button
                           onClick={() => fileInputRef.current?.click()}
@@ -361,32 +593,11 @@ function App() {
                           </svg>
                           Выбрать файл
                         </button>
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept=".xlsx,.xls,.txt,.csv"
-                          onChange={handleFileInputChange}
-                          className="hidden"
-                        />
+                        <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.txt,.csv" onChange={handleFileInputChange} className="hidden" />
                         <div className="flex items-center gap-1.5">
-                          <span className="inline-flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded">
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
-                            </svg>
-                            Excel
-                          </span>
-                          <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-700 border border-gray-200 px-2 py-1 rounded">
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
-                            </svg>
-                            TXT
-                          </span>
-                          <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-700 border border-gray-200 px-2 py-1 rounded">
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
-                            </svg>
-                            CSV
-                          </span>
+                          <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded">Excel</span>
+                          <span className="text-xs bg-gray-50 text-gray-700 border border-gray-200 px-2 py-1 rounded">TXT</span>
+                          <span className="text-xs bg-gray-50 text-gray-700 border border-gray-200 px-2 py-1 rounded">CSV</span>
                         </div>
                       </div>
                     </div>
@@ -394,35 +605,28 @@ function App() {
                 </div>
               </div>
 
-              {/* ===== РУЧНОЙ ВВОД ===== */}
+              {/* Text input */}
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                    <h3 className="font-semibold text-gray-800 text-sm">Или вставьте прайс текстом</h3>
-                  </div>
+                  <h3 className="font-semibold text-gray-800 text-sm">Или вставьте прайс текстом</h3>
                   <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                    {selectedSupplierEntries.length} позиций распознано
+                    {selectedSupplierEntries.length} позиций
                   </span>
                 </div>
                 <textarea
                   value={selectedSupplier.priceText}
                   onChange={(e) => updatePriceText(selectedSupplier.id, e.target.value)}
-                  placeholder={"Вставьте прайс-лист в любом формате:\n\nSamsung-A17-4/128-Gray  14500\nТовар Б - 2300\nЯблоко Гала 1кг — 150\nАртикул 123 | Товар | 990"}
+                  placeholder={"Вставьте прайс в любом формате:\n\nSamsung-A17-4/128-Gray  14500\nSamsung A17 4/128 серый — 14500\nSM-A175F 4+128 Black  14500"}
                   className="w-full h-40 px-5 py-4 text-sm font-mono text-gray-800 resize-none focus:outline-none placeholder:text-gray-400"
                 />
               </div>
 
-              {/* ===== РАСПОЗНАННЫЕ ПОЗИЦИИ ===== */}
+              {/* Parsed preview */}
               {selectedSupplierEntries.length > 0 && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                   <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                     <h3 className="font-semibold text-gray-800 text-sm">Распознанные позиции</h3>
-                    <span className="text-xs text-gray-500">
-                      {selectedSupplierEntries.length} из строк обработано
-                    </span>
+                    <span className="text-xs text-gray-500">{selectedSupplierEntries.length} позиций</span>
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     <table className="w-full text-sm">
@@ -430,38 +634,78 @@ function App() {
                         <tr>
                           <th className="text-left px-5 py-2 text-gray-600 font-medium w-12">№</th>
                           <th className="text-left px-5 py-2 text-gray-600 font-medium">Наименование</th>
+                          {useLLM && <th className="text-left px-5 py-2 text-purple-600 font-medium">→ Нормализованное</th>}
                           <th className="text-right px-5 py-2 text-gray-600 font-medium w-32">Цена</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedSupplierEntries.map((entry, idx) => (
-                          <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
-                            <td className="px-5 py-2 text-gray-400 text-xs">{idx + 1}</td>
-                            <td className="px-5 py-2 text-gray-800">{entry.productName}</td>
-                            <td className="px-5 py-2 text-right font-medium text-gray-800">
-                              {entry.price !== null ? entry.price.toLocaleString('ru-RU') + ' ₽' : '—'}
-                            </td>
-                          </tr>
-                        ))}
+                        {selectedSupplierEntries.map((entry, idx) => {
+                          const normalized = useLLM ? normalizedMap[entry.productName] : null;
+                          return (
+                            <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
+                              <td className="px-5 py-2 text-gray-400 text-xs">{idx + 1}</td>
+                              <td className="px-5 py-2 text-gray-800">{entry.productName}</td>
+                              {useLLM && (
+                                <td className="px-5 py-2 text-purple-700 text-xs">
+                                  {normalized && normalized !== entry.productName ? normalized : '—'}
+                                </td>
+                              )}
+                              <td className="px-5 py-2 text-right font-medium text-gray-800">
+                                {entry.price !== null ? entry.price.toLocaleString('ru-RU') + ' ₽' : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
                 </div>
               )}
 
-              {/* ===== СРАВНИТЕЛЬНАЯ ТАБЛИЦА ===== */}
+              {/* Normalization progress */}
+              {isNormalizing && (
+                <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+                  <div className="flex items-center gap-3 mb-2">
+                    <svg className="w-5 h-5 text-purple-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span className="text-sm font-medium text-purple-800">Нормализация названий...</span>
+                  </div>
+                  <div className="w-full bg-purple-200 rounded-full h-2">
+                    <div
+                      className="bg-purple-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${normalizationProgress.total > 0 ? (normalizationProgress.current / normalizationProgress.total) * 100 : 0}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-purple-600 mt-1">
+                    {normalizationProgress.current} из {normalizationProgress.total} названий
+                  </p>
+                </div>
+              )}
+
+              {/* Comparison Table */}
               {suppliers.length > 1 && comparisonData.length > 0 && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                  <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                  <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-gray-800 text-sm">Сравнительная таблица</h3>
+                      <h3 className="font-semibold text-gray-800 text-sm">
+                        {useLLM ? 'Сравнительная таблица (с LLM-нормализацией)' : 'Сравнительная таблица'}
+                      </h3>
                       <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                        {comparisonData.length} товаров
+                        {comparisonData.length} {useLLM ? 'уник. товаров' : 'позиций'}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-500">
-                      <span className="inline-block w-4 h-4 bg-green-100 border border-green-300 rounded-sm"></span>
-                      Лучшая цена
+                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-4 h-4 bg-green-100 border border-green-300 rounded-sm"></span>
+                        Лучшая цена
+                      </span>
+                      {!useLLM && totalProducts !== comparisonData.length && (
+                        <span className="text-purple-600">
+                          💡 Включите LLM для группировки ({totalProducts} → {comparisonData.length})
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="overflow-x-auto">
@@ -491,22 +735,14 @@ function App() {
                               {suppliers.map(s => {
                                 const price = item.prices[s.id];
                                 const isMin = price !== null && price === minPrice;
-                                
                                 return (
                                   <td
                                     key={s.id}
                                     className={`px-4 py-2.5 text-right border-r border-gray-200 last:border-r-0 whitespace-nowrap ${
-                                      isMin
-                                        ? 'bg-green-50 text-green-800 font-bold'
-                                        : price !== null
-                                        ? 'text-gray-700'
-                                        : 'text-gray-300'
+                                      isMin ? 'bg-green-50 text-green-800 font-bold' : price !== null ? 'text-gray-700' : 'text-gray-300'
                                     }`}
                                   >
-                                    {price !== null && price !== undefined
-                                      ? `${price.toLocaleString('ru-RU')} ₽`
-                                      : '—'
-                                    }
+                                    {price !== null && price !== undefined ? `${price.toLocaleString('ru-RU')} ₽` : '—'}
                                   </td>
                                 );
                               })}
@@ -519,7 +755,6 @@ function App() {
                 </div>
               )}
 
-              {/* Подсказка для одного поставщика */}
               {suppliers.length === 1 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                   <div className="flex gap-3">
@@ -528,9 +763,7 @@ function App() {
                     </svg>
                     <div>
                       <p className="text-sm font-medium text-amber-800">Добавьте ещё поставщиков для сравнения</p>
-                      <p className="text-xs text-amber-700 mt-1">
-                        Сравнительная таблица с подсветкой лучших цен появится при 2+ поставщиках.
-                      </p>
+                      <p className="text-xs text-amber-700 mt-1">Сравнительная таблица появится при 2+ поставщиках.</p>
                     </div>
                   </div>
                 </div>
@@ -543,8 +776,8 @@ function App() {
       {/* Footer */}
       <footer className="bg-white border-t border-gray-200 px-4 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <p>Данные сохраняются локально в браузере</p>
-          <p>Умный парсер поддерживает форматы: <code className="bg-gray-100 px-1 py-0.5 rounded">Товар - Цена</code> <code className="bg-gray-100 px-1 py-0.5 rounded">Товар  Цена</code> <code className="bg-gray-100 px-1 py-0.5 rounded">Товар: Цена</code> и Excel</p>
+          <p>Данные сохраняются локально • LLM через OpenAI API</p>
+          <p>Форматы: Excel (.xlsx, .xls) • Текст (.txt, .csv)</p>
         </div>
       </footer>
     </div>
