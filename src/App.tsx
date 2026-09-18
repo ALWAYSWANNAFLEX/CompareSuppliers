@@ -733,7 +733,7 @@ function App() {
                   </div>
 
                   {/* Comparison Table */}
-                  <div className="flex-1 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-0">
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 280px)' }}>
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-gray-800 text-sm">
@@ -744,7 +744,7 @@ function App() {
                         </span>
                       </div>
                     </div>
-                    <div className="overflow-auto flex-1">
+                    <div className="overflow-y-auto flex-1">
                       <table className="w-full text-sm">
                         <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                           <tr>
