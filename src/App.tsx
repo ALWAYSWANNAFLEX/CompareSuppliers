@@ -23,6 +23,10 @@ function App() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeTab, setActiveTab] = useState<'suppliers' | 'comparison'>('suppliers');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const addFormRef = useRef<HTMLDivElement>(null);
 
   // LLM settings
   const [showSettings, setShowSettings] = useState(false);
@@ -52,6 +56,23 @@ function App() {
       setCacheSize(size);
     })();
   }, []);
+
+  // useOutsideClick для закрытия формы добавления
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (addFormRef.current && !addFormRef.current.contains(event.target as Node)) {
+        setShowAddForm(false);
+        setNewSupplierName('');
+      }
+    }
+
+    if (showAddForm) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [showAddForm]);
 
   const saveSuppliers = useCallback((newSuppliers: Supplier[]) => {
     setSuppliers(newSuppliers);
@@ -278,6 +299,15 @@ function App() {
     return names.size;
   }, [suppliers]);
 
+  // Фильтрация для поиска в сравнительной таблице
+  const filteredComparisonData = useMemo(() => {
+    if (!searchQuery.trim()) return comparisonData;
+    const query = searchQuery.toLowerCase().trim();
+    return comparisonData.filter(item => 
+      item.productName.toLowerCase().includes(query)
+    );
+  }, [comparisonData, searchQuery]);
+
   const currentModel = MODELS.find(m => m.id === settings.model) || MODELS[3];
 
   return (
@@ -296,6 +326,47 @@ function App() {
                 <h1 className="text-xl font-bold text-gray-900">Сравнение прайсов</h1>
                 <p className="text-sm text-gray-500">Анализ цен от нескольких поставщиков</p>
               </div>
+            </div>
+            {/* Tabs */}
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setActiveTab('suppliers')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  activeTab === 'suppliers'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  Поставщики
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveTab('comparison')}
+                disabled={comparisonData.length === 0}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  activeTab === 'comparison'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : comparisonData.length === 0
+                    ? 'text-gray-400 cursor-not-allowed'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  Сравнение
+                  {comparisonData.length > 0 && (
+                    <span className="bg-green-100 text-green-700 text-xs px-1.5 py-0.5 rounded-full">
+                      {comparisonData.length}
+                    </span>
+                  )}
+                </span>
+              </button>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {hasAnyNormalization && (
@@ -374,9 +445,9 @@ function App() {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col lg:flex-row max-w-7xl mx-auto w-full">
+      <div className={`flex-1 flex flex-col lg:flex-row ${activeTab === 'comparison' ? 'max-w-full' : 'max-w-7xl'} mx-auto w-full`}>
         {/* Sidebar */}
-        <aside className="w-full lg:w-80 bg-white border-b lg:border-b-0 lg:border-r border-gray-200 p-4 overflow-y-auto">
+        <aside className={`w-full lg:w-80 bg-white border-b lg:border-b-0 lg:border-r border-gray-200 p-4 overflow-y-auto transition-all duration-300 ${sidebarCollapsed ? 'lg:hidden' : ''}`}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-800">Поставщики</h2>
             <button onClick={() => setShowAddForm(!showAddForm)}
@@ -386,11 +457,20 @@ function App() {
           </div>
 
           {showAddForm && (
-            <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+            <div ref={addFormRef} className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200 relative">
+              <button
+                onClick={() => { setShowAddForm(false); setNewSupplierName(''); }}
+                className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors"
+                title="Закрыть"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
               <input type="text" value={newSupplierName} onChange={(e) => setNewSupplierName(e.target.value)}
                 placeholder="Название поставщика"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2"
-                onKeyDown={(e) => e.key === 'Enter' && addSupplier()} autoFocus />
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2 pr-8"
+                onKeyDown={(e) => { if (e.key === 'Enter') addSupplier(); if (e.key === 'Escape') { setShowAddForm(false); setNewSupplierName(''); } }} autoFocus />
               <div className="flex gap-2">
                 <button onClick={addSupplier} className="flex-1 px-3 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600">Добавить</button>
                 <button onClick={() => { setShowAddForm(false); setNewSupplierName(''); }} className="flex-1 px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-md hover:bg-gray-300">Отмена</button>
@@ -448,8 +528,20 @@ function App() {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 p-4 lg:p-6 overflow-y-auto">
-          {!selectedSupplier && suppliers.length === 0 ? (
+        <main className={`flex-1 overflow-y-auto ${activeTab === 'comparison' ? 'p-2 lg:p-4' : 'p-4 lg:p-6'}`}>
+          {/* Sidebar toggle button */}
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="mb-4 flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+            title={sidebarCollapsed ? 'Показать панель' : 'Скрыть панель'}
+          >
+            <svg className={`w-4 h-4 transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+            {sidebarCollapsed ? 'Показать панель' : 'Скрыть панель'}
+          </button>
+          {/* Suppliers Tab */}
+          {activeTab === 'suppliers' && (!selectedSupplier && suppliers.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-20">
               <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-6">
                 <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -597,78 +689,117 @@ function App() {
                 </div>
               )}
 
-              {/* Comparison Table */}
-              {suppliers.length > 1 && comparisonData.length > 0 && (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                  <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-gray-800 text-sm">
-                        {effectiveLLM ? 'Сравнительная таблица (LLM)' : 'Сравнительная таблица'}
-                      </h3>
-                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{comparisonData.length} {effectiveLLM ? 'уник.' : 'позиций'}</span>
+            </div>
+          ) : null)}
+
+          {/* Comparison Tab */}
+          {activeTab === 'comparison' && (
+            <div className="h-full flex flex-col">
+              {comparisonData.length > 0 ? (
+                <>
+                  {/* Search and controls */}
+                  <div className="mb-4 flex items-center gap-4 flex-wrap">
+                    <div className="flex-1 min-w-[200px] relative">
+                      <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Поиск по наименованию..."
+                        className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      {searchQuery && (
+                        <button
+                          onClick={() => setSearchQuery('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-xs text-gray-500">
-                      <span className="flex items-center gap-1"><span className="inline-block w-4 h-4 bg-green-100 border border-green-300 rounded-sm"></span>Лучшая цена</span>
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-4 h-4 bg-green-100 border border-green-300 rounded-sm"></span>
+                        Лучшая цена
+                      </span>
                       {!effectiveLLM && hasAnyNormalization && (
-                        <button onClick={() => setUseLLM(true)} className="text-purple-600 hover:underline">💡 Включите LLM для группировки</button>
-                      )}
-                      {!hasAnyNormalization && (
-                        <span className="text-purple-600">💡 Нажмите «Нормализовать» для объединения одинаковых товаров</span>
+                        <button onClick={() => setUseLLM(true)} className="text-purple-600 hover:underline">💡 Включите LLM</button>
                       )}
                     </div>
                   </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 sticky top-0">
-                        <tr>
-                          <th className="text-left px-4 py-3 text-gray-600 font-medium whitespace-nowrap border-r border-gray-200">Наименование</th>
-                          {suppliers.map(s => (
-                            <th key={s.id} className="text-right px-4 py-3 text-gray-600 font-medium whitespace-nowrap border-r border-gray-200 last:border-r-0">{s.name}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {comparisonData.map((item, idx) => {
-                          const allPrices = suppliers.map(s => item.prices[s.id] ?? null);
-                          const minPrice = findMinPrice(allPrices);
-                          return (
-                            <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
-                              <td className="px-4 py-2.5 text-gray-800 font-medium border-r border-gray-200 whitespace-nowrap">{item.productName}</td>
-                              {suppliers.map(s => {
-                                const price = item.prices[s.id];
-                                const isMin = price !== null && price === minPrice;
-                                return (
-                                  <td key={s.id} className={`px-4 py-2.5 text-right border-r border-gray-200 last:border-r-0 whitespace-nowrap ${
-                                    isMin ? 'bg-green-50 text-green-800 font-bold' : price !== null ? 'text-gray-700' : 'text-gray-300'
-                                  }`}>
-                                    {price !== null && price !== undefined ? `${price.toLocaleString('ru-RU')} ₽` : '—'}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
 
-              {suppliers.length === 1 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                  <div className="flex gap-3">
-                    <svg className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <div>
-                      <p className="text-sm font-medium text-amber-800">Добавьте ещё поставщиков для сравнения</p>
-                      <p className="text-xs text-amber-700 mt-1">Сравнительная таблица появится при 2+ поставщиках.</p>
+                  {/* Comparison Table */}
+                  <div className="flex-1 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-0">
+                    <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-gray-800 text-sm">
+                          {effectiveLLM ? 'Сравнительная таблица (LLM)' : 'Сравнительная таблица'}
+                        </h3>
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+                          {filteredComparisonData.length} из {comparisonData.length}
+                        </span>
+                      </div>
                     </div>
+                    <div className="overflow-auto flex-1">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                          <tr>
+                            <th className="text-left px-4 py-3 text-gray-600 font-medium whitespace-nowrap border-r border-b border-gray-200 bg-gray-50">Наименование</th>
+                            {suppliers.map(s => (
+                              <th key={s.id} className="text-right px-4 py-3 text-gray-600 font-medium whitespace-nowrap border-r border-b border-gray-200 last:border-r-0 bg-gray-50">{s.name}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredComparisonData.map((item, idx) => {
+                            const allPrices = suppliers.map(s => item.prices[s.id] ?? null);
+                            const minPrice = findMinPrice(allPrices);
+                            return (
+                              <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
+                                <td className="px-4 py-2.5 text-gray-800 font-medium border-r border-gray-200 whitespace-nowrap">{item.productName}</td>
+                                {suppliers.map(s => {
+                                  const price = item.prices[s.id];
+                                  const isMin = price !== null && price === minPrice;
+                                  return (
+                                    <td key={s.id} className={`px-4 py-2.5 text-right border-r border-gray-200 last:border-r-0 whitespace-nowrap ${
+                                      isMin ? 'bg-green-50 text-green-800 font-bold' : price !== null ? 'text-gray-700' : 'text-gray-300'
+                                    }`}>
+                                      {price !== null && price !== undefined ? `${price.toLocaleString('ru-RU')} ₽` : '—'}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })}
+                          {filteredComparisonData.length === 0 && (
+                            <tr>
+                              <td colSpan={suppliers.length + 1} className="px-4 py-8 text-center text-gray-400">
+                                Ничего не найдено по запросу «{searchQuery}»
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center text-gray-400">
+                    <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    <p className="text-lg font-medium mb-2">Нет данных для сравнения</p>
+                    <p className="text-sm">Добавьте минимум 2 поставщика и загрузите их прайсы</p>
                   </div>
                 </div>
               )}
             </div>
-          ) : null}
+          )}
         </main>
       </div>
 
