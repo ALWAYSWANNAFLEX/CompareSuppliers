@@ -311,10 +311,10 @@ function App() {
   const currentModel = MODELS.find(m => m.id === settings.model) || MODELS[3];
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
+      <header className="bg-white shadow-sm border-b border-gray-200 flex-shrink-0">
+        <div className="max-w-7xl mx-auto px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
@@ -445,9 +445,9 @@ function App() {
         </div>
       )}
 
-      <div className={`flex-1 flex flex-col lg:flex-row ${activeTab === 'comparison' ? 'max-w-full' : 'max-w-7xl'} mx-auto w-full`}>
+      <div className={`flex-1 flex flex-col lg:flex-row ${activeTab === 'comparison' ? 'max-w-full' : 'max-w-7xl'} mx-auto w-full overflow-hidden`}>
         {/* Sidebar */}
-        <aside className={`w-full lg:w-80 bg-white border-b lg:border-b-0 lg:border-r border-gray-200 p-4 overflow-y-auto transition-all duration-300 ${sidebarCollapsed ? 'lg:hidden' : ''}`}>
+        <aside className={`w-full lg:w-80 lg:flex-shrink-0 bg-white border-b lg:border-b-0 lg:border-r border-gray-200 p-4 overflow-y-auto transition-all duration-300 ${sidebarCollapsed ? 'lg:hidden' : ''}`}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-800">Поставщики</h2>
             <button onClick={() => setShowAddForm(!showAddForm)}
@@ -528,7 +528,7 @@ function App() {
         </aside>
 
         {/* Main Content */}
-        <main className={`flex-1 overflow-y-auto ${activeTab === 'comparison' ? 'p-2 lg:p-4' : 'p-4 lg:p-6'}`}>
+        <main className={`flex-1 min-h-0 overflow-hidden ${activeTab === 'comparison' ? 'p-2 lg:p-4' : 'p-4 lg:p-6'}`}>
           {/* Sidebar toggle button */}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -541,7 +541,9 @@ function App() {
             {sidebarCollapsed ? 'Показать панель' : 'Скрыть панель'}
           </button>
           {/* Suppliers Tab */}
-          {activeTab === 'suppliers' && (!selectedSupplier && suppliers.length === 0 ? (
+          {activeTab === 'suppliers' && (
+            <div className="h-full overflow-y-auto">
+              {!selectedSupplier && suppliers.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-20">
               <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-6">
                 <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -690,11 +692,13 @@ function App() {
               )}
 
             </div>
-          ) : null)}
+          ) : null}
+            </div>
+          )}
 
           {/* Comparison Tab */}
           {activeTab === 'comparison' && (
-            <div className="h-full flex flex-col">
+            <div className="h-full flex flex-col overflow-hidden">
               {comparisonData.length > 0 ? (
                 <>
                   {/* Search and controls */}
@@ -733,7 +737,7 @@ function App() {
                   </div>
 
                   {/* Comparison Table */}
-                  <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col flex-1 min-h-0">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-gray-800 text-sm">
@@ -803,7 +807,7 @@ function App() {
         </main>
       </div>
 
-      <footer className="bg-white border-t border-gray-200 px-4 py-3">
+      <footer className="bg-white border-t border-gray-200 px-4 py-2 flex-shrink-0">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
           <p>Данные локально • LLM через <a href="https://nordrouter.net" target="_blank" rel="noopener" className="text-purple-600 hover:underline">NordRouter</a></p>
           <p>Excel • TXT • CSV</p>
