@@ -3,7 +3,7 @@
  * NordRouter — OpenAI-совместимый API роутер (nordrouter.net)
  */
 
-import { cacheGetBatch, cachePutBatch, cacheSize, cacheClear } from './db';
+import { cacheGetBatch, cachePutBatch, cacheSize, cacheClear } from "./db";
 
 // ============================================================
 //  КОНФИГУРАЦИЯ NORDROUTER
@@ -17,22 +17,57 @@ export interface ModelOption {
 }
 
 export const MODELS: ModelOption[] = [
-  { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', note: 'Самая дешёвая', priceNote: '~2₽/1M' },
-  { id: 'google/gemma-4-31b-it', name: 'Gemma 4 31B', note: 'Быстрая', priceNote: '~3₽/1M' },
-  { id: 'openai/gpt-5.4-nano', name: 'GPT-5.4 Nano', note: 'Компактная', priceNote: '~5₽/1M' },
-  { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', note: 'Рекомендуется', priceNote: '~10₽/1M' },
-  { id: 'qwen/qwen3.7-max', name: 'Qwen 3.7 Max', note: 'Мощная', priceNote: '~17₽/1M' },
-  { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash', note: 'Качественная', priceNote: '~21₽/1M' },
-  { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', note: 'Топ качество', priceNote: '~41₽/1M' },
+  {
+    id: "deepseek/deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    note: "Самая дешёвая",
+    priceNote: "~2₽/1M",
+  },
+  {
+    id: "google/gemma-4-31b-it",
+    name: "Gemma 4 31B",
+    note: "Быстрая",
+    priceNote: "~3₽/1M",
+  },
+  {
+    id: "openai/gpt-5.4-nano",
+    name: "GPT-5.4 Nano",
+    note: "Компактная",
+    priceNote: "~5₽/1M",
+  },
+  {
+    id: "deepseek/deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    note: "Рекомендуется",
+    priceNote: "~10₽/1M",
+  },
+  {
+    id: "qwen/qwen3.7-max",
+    name: "Qwen 3.7 Max",
+    note: "Мощная",
+    priceNote: "~17₽/1M",
+  },
+  {
+    id: "google/gemini-3.5-flash",
+    name: "Gemini 3.5 Flash",
+    note: "Качественная",
+    priceNote: "~21₽/1M",
+  },
+  {
+    id: "anthropic/claude-sonnet-4.6",
+    name: "Claude Sonnet 4.6",
+    note: "Топ качество",
+    priceNote: "~41₽/1M",
+  },
 ];
 
-export const DEFAULT_MODEL = 'deepseek/deepseek-v4-pro';
+export const DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 
 // ============================================================
 //  НАСТРОЙКИ (localStorage — маленькие данные)
 // ============================================================
 
-const SETTINGS_KEY = 'llm_settings';
+const SETTINGS_KEY = "llm_settings";
 
 export interface LLMSettings {
   apiKey: string;
@@ -44,19 +79,21 @@ export function getSettings(): LLMSettings {
     const saved = localStorage.getItem(SETTINGS_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      const apiKey = parsed.apiKey || '';
+      const apiKey = parsed.apiKey || "";
       const model = parsed.model || DEFAULT_MODEL;
-      
+
       // Валидация модели — если сохранена старая/невалидная, сбрасываем
-      const modelExists = MODELS.some(m => m.id === model);
+      const modelExists = MODELS.some((m) => m.id === model);
       if (modelExists) {
         return { apiKey, model };
       }
       // Модель невалидна — сбрасываем на дефолтную
       return { apiKey, model: DEFAULT_MODEL };
     }
-  } catch { /* ignore */ }
-  return { apiKey: '', model: DEFAULT_MODEL };
+  } catch {
+    /* ignore */
+  }
+  return { apiKey: "", model: DEFAULT_MODEL };
 }
 
 export function saveSettings(settings: LLMSettings) {
@@ -80,22 +117,20 @@ export async function getCacheSize(): Promise<number> {
 // ============================================================
 
 const SYSTEM_PROMPT = `Ты — эксперт по стандартизации названий товаров (электроника, смартфоны, планшеты).
-Твоя задача — привести название товара к единому стандартному формату.
+Твоя задача — привести название товара к единому стандартному формату. Лучше всего опираться на официальные источники.
 
 Формат вывода:
-[Бренд] [Модель] [ОЗУ]/[Встроенная память] [Цвет] [Код региона]
+[Бренд] [Модель] [ОЗУ]/[Встроенная память] [Цвет]
 
 Правила:
-1. Бренд — латиницей как официально (Samsung, Apple, Xiaomi, Realme, Poco, Google и т.д.)
-2. Модель — как в официальном каталоге (Galaxy A17, iPhone 15 Pro, Pixel 11 Pro XL и т.д.)
-3. ОЗУ и встроенная память — числом через слэш (4/128, 8/256, 12/256). Если встроенная память не указана — пиши только ОЗУ.
-4. Цвет — ОСТАВЬ КАК ЕСТЬ (латиницей), не переводи (Gray, Black, Canyon, Natural Titanium и т.д.)
-5. Код региона — ОБЯЗАТЕЛЬНО последний параметр, если регион указан в исходном названии. Формат: 2 буквы латиницей (CA, EU, RU, US, SEA, EAC, IN и т.д.).
-6. Конвертация эмодзи флагов в коды регионов: 🇨🇦→CA, 🇺🇸→US, 🇷🇺→RU, 🇪🇺→EU, 🇮🇳→IN, 🇩🇪→DE, 🇬🇧→GB, 🇯🇵→JP, 🇰🇷→KR, 🇨🇳→CN и т.д.
-7. Разделитель: пробел между блоками, слэш только между ОЗУ и памятью.
-8. Убери мусор: внутренние артикулы (SM-A175F, M2101K7AI и т.п.), слова "новый", "оригинал", "global version" и т.п.
-9. ВАЖНО для смартфонов/телефонов: ОЗУ должно быть указано ОБЯЗАТЕЛЬНО. Если в исходном названии ОЗУ не указано, определи его по официальным характеристикам этой модели (ты знаешь спецификации популярных смартфонов). Например: Google Pixel 11 Pro XL всегда имеет 12 ГБ ОЗУ, iPhone 15 Pro Max — 8 ГБ, Samsung Galaxy S24 Ultra — 12 ГБ и т.д.
-10. Если регион не указан в исходном названии — не добавляй его.
+1. Бренд — латиницей как официально (Samsung, Apple, Xiaomi, Realme, Poco, Google и т.д.). Так же учитывай регистр, некоторые наименования могут быть в UPPER_CASE, нужно привести их к одному наименованию
+2. Модель — как в официальном каталоге (Galaxy A17, iPhone 15 Pro, Pixel 11 Pro XL и т.д.). Так же учитывай регистр, некоторые наименования могут быть в UPPER_CASE, нужно привести их к одному наименованию
+3. ОЗУ и встроенная память — числом через слэш (4/128, 8/256, 12/256), остальные форматы не приветствуются. ВАЖНО для смартфонов/телефонов: ОЗУ должно быть указано ОБЯЗАТЕЛЬНО. Если в исходном названии ОЗУ не указано, определи его по официальным характеристикам этой модели (ты знаешь спецификации популярных смартфонов). Например: Google Pixel 11 Pro XL всегда имеет 12 ГБ ОЗУ, iPhone 15 Pro Max — 8 ГБ, Samsung Galaxy S24 Ultra — 12 ГБ и т.д.
+4. Цвет — ОСТАВЬ КАК ЕСТЬ (латиницей), не переводи (Gray, Black, Canyon, Natural Titanium и т.д.), если название написано в UPPER_CASE или lower_case, то приводи к виду "первая буква заглавная, остальные строчные"
+5. Код региона — полностью удаляем, может быть как symbol (Примеры: 🇨🇦, 🇺🇸, 🇷🇺, 🇪🇺, 🇮🇳, 🇩🇪, 🇬🇧, 🇯🇵, 🇰🇷, 🇨🇳), либо как код региона (Примеры: CA, US, RU, IN, UA, ML, EU, JP), в обоих случаях удалить.
+6. Разделитель: пробел между блоками, слэш только между ОЗУ и памятью.
+7. Убери мусор: внутренние артикулы (SM-A175F, M2101K7AI и т.п.), слова "новый", "оригинал", "global version" и т.п.
+
 
 Примеры:
 - "Samsung-A17-4/128-Gray" → "Samsung Galaxy A17 4/128 Gray"
@@ -106,17 +141,21 @@ const SYSTEM_PROMPT = `Ты — эксперт по стандартизации
 - "Realme C55 6/128 Sunshower" → "Realme C55 6/128 Sunshower"
 - "Poco X6 Pro 8/256" → "Poco X6 Pro 8/256"
 - "Samsung A15 4/64 Blue" → "Samsung Galaxy A15 4/64 Blue"
-- "Google Pixel 11 Pro XL 256 Fog🇨🇦" → "Google Pixel 11 Pro XL 12/256 Fog CA"
-- "Pixel-11-Pro-XL-12/256-Canyon-ca" → "Google Pixel 11 Pro XL 12/256 Canyon CA"
-- "Samsung Galaxy S24 Ultra 512 Titanium Black EU" → "Samsung Galaxy S24 Ultra 12/512 Titanium Black EU"
-- "iPhone 16 Pro 256 Desert🇷🇺" → "Apple iPhone 16 Pro 8/256 Desert Titanium RU"`;
+- "Google Pixel 11 Pro XL 256 Fog🇨🇦" → "Google Pixel 11 Pro XL 12/256 Fog"
+- "Pixel-11-Pro-XL-12/256-Canyon-ca" → "Google Pixel 11 Pro XL 12/256 Canyon"
+- "Samsung Galaxy S24 Ultra 512 Titanium Black EU" → "Samsung Galaxy S24 Ultra 12/512 Titanium Black"
+- "iPhone 16 Pro 256 Desert🇷🇺" → "Apple iPhone 16 Pro 8/256 Desert Titanium"
+- "HONOR 400 8+256GB BLACK EU без зарядки" → "Honor 400 8/256 Black"
+- "HONOR Choice Earbuds X7 Pro White RU" → "HONOR Choice Earbuds X7 Pro White"
+- "HUAWEI Band 11 BLACK" → "HUAWEI Band 11 Black"
+`;
 
 // ============================================================
 //  API CALLS
 // ============================================================
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -128,53 +167,60 @@ async function callNordRouter(
   apiKey: string,
   model: string,
   messages: { role: string; content: string }[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<string> {
   const MAX_RETRIES = 5;
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch('https://nordrouter.net/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
+      const response = await fetch(
+        "https://nordrouter.net/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature: 0.1,
+            max_tokens: 1000,
+          }),
+          signal,
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: 0.1,
-          max_tokens: 1000,
-        }),
-        signal,
-      });
+      );
 
       if (response.status === 429) {
-        const retryAfter = response.headers.get('retry-after');
-        const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 2000;
+        const retryAfter = response.headers.get("retry-after");
+        const waitMs = retryAfter
+          ? parseInt(retryAfter) * 1000
+          : Math.pow(2, attempt) * 2000;
         await sleep(Math.min(waitMs, 30000));
         continue;
       }
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(error.error?.message || `NordRouter API error: ${response.status}`);
+        throw new Error(
+          error.error?.message || `NordRouter API error: ${response.status}`,
+        );
       }
 
       const data = await response.json();
-      return data.choices?.[0]?.message?.content?.trim() || '';
+      return data.choices?.[0]?.message?.content?.trim() || "";
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') throw err;
+      if (err instanceof Error && err.name === "AbortError") throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
-      
+
       if (attempt < MAX_RETRIES - 1) {
         await sleep(Math.pow(2, attempt) * 2000);
       }
     }
   }
 
-  throw lastError || new Error('Max retries exceeded');
+  throw lastError || new Error("Max retries exceeded");
 }
 
 // ============================================================
@@ -185,19 +231,19 @@ async function normalizeBatch(
   apiKey: string,
   model: string,
   names: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<string[]> {
-  const numbered = names.map((n, i) => `${i + 1}. ${n}`).join('\n');
+  const numbered = names.map((n, i) => `${i + 1}. ${n}`).join("\n");
   const userMessage = `Нормализуй следующие названия товаров. Верни ТОЛЬКО JSON массив нормализованных названий в том же порядке, без пояснений. Пример ответа: ["Samsung Galaxy A17 4/128 Gray", "Google Pixel 11 Pro XL 12/256 Fog CA"]\n\nНазвания:\n${numbered}`;
 
   const content = await callNordRouter(
     apiKey,
     model,
     [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userMessage },
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userMessage },
     ],
-    signal
+    signal,
   );
 
   // Парсим JSON ответ
@@ -210,9 +256,14 @@ async function normalizeBatch(
       }
     }
   } catch {
-    const lines = content.split('\n').filter((l: string) => l.trim());
+    const lines = content.split("\n").filter((l: string) => l.trim());
     if (lines.length === names.length) {
-      return lines.map((l: string) => l.replace(/^[\d."'\-\s]+/, '').replace(/["']+$/, '').trim());
+      return lines.map((l: string) =>
+        l
+          .replace(/^[\d."'\-\s]+/, "")
+          .replace(/["']+$/, "")
+          .trim(),
+      );
     }
   }
 
@@ -239,13 +290,18 @@ export interface NormalizationResult {
 export async function normalizeNamesBatch(
   names: string[],
   onProgress?: (current: number, total: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<NormalizationResult> {
   const settings = getSettings();
   const { apiKey, model } = settings;
 
   const results = new Map<string, string>();
-  const stats: NormalizationStats = { total: names.length, fromCache: 0, normalized: 0, failed: 0 };
+  const stats: NormalizationStats = {
+    total: names.length,
+    fromCache: 0,
+    normalized: 0,
+    failed: 0,
+  };
 
   if (!apiKey) {
     for (const name of names) results.set(name, name);
@@ -254,7 +310,7 @@ export async function normalizeNamesBatch(
   }
 
   // Загружаем кэш из IndexedDB (массово — эффективно)
-  const cacheKeys = names.map(n => n.toLowerCase().trim());
+  const cacheKeys = names.map((n) => n.toLowerCase().trim());
   const cache = await cacheGetBatch(cacheKeys);
 
   // Проверяем кэш
@@ -315,17 +371,21 @@ export async function normalizeNamesBatch(
         try {
           const userMsg = `Нормализуй название товара. Верни ТОЛЬКО нормализованное название без пояснений и кавычек.\n\n"${name}"`;
           const result = await callNordRouter(
-            apiKey, model,
+            apiKey,
+            model,
             [
-              { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'user', content: userMsg },
+              { role: "system", content: SYSTEM_PROMPT },
+              { role: "user", content: userMsg },
             ],
-            signal
+            signal,
           );
-          const cleaned = result.replace(/^["']+|["']+$/g, '').trim();
+          const cleaned = result.replace(/^["']+|["']+$/g, "").trim();
           results.set(name, cleaned || name);
           cacheBuffer[name.toLowerCase().trim()] = cleaned || name;
-          if (cleaned && cleaned.toLowerCase().trim() !== name.toLowerCase().trim()) {
+          if (
+            cleaned &&
+            cleaned.toLowerCase().trim() !== name.toLowerCase().trim()
+          ) {
             stats.normalized++;
           }
           batchOk = true;
@@ -346,8 +406,9 @@ export async function normalizeNamesBatch(
 
     if (onProgress) {
       onProgress(
-        Math.min(i + BATCH_SIZE, toProcess.length) + (names.length - toProcess.length),
-        names.length
+        Math.min(i + BATCH_SIZE, toProcess.length) +
+          (names.length - toProcess.length),
+        names.length,
       );
     }
 
