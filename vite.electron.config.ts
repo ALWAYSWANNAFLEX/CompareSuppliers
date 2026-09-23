@@ -29,6 +29,7 @@ export default defineConfig({
     ]),
     renderer(),
   ],
+  base: './', // Относительные пути для Electron
   build: {
     outDir: 'dist',
   },
