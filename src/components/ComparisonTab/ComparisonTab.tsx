@@ -11,12 +11,27 @@ export function ComparisonTab({
   onToggleLLM,
 }: ComparisonTabProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [showOnlyIntersecting, setShowOnlyIntersecting] = useState(false);
 
   const filteredData = useMemo(() => {
-    if (!searchQuery.trim()) return comparisonData;
-    const query = searchQuery.toLowerCase().trim();
-    return comparisonData.filter(item => item.productName.toLowerCase().includes(query));
-  }, [comparisonData, searchQuery]);
+    let result = comparisonData;
+    
+    // Фильтр по поисковому запросу
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      result = result.filter(item => item.productName.toLowerCase().includes(query));
+    }
+    
+    // Фильтр только пересекающихся позиций (есть у всех поставщиков)
+    if (showOnlyIntersecting) {
+      result = result.filter(item => {
+        const prices = suppliers.map(s => item.prices[s.id]);
+        return prices.every(price => price !== null && price !== undefined);
+      });
+    }
+    
+    return result;
+  }, [comparisonData, searchQuery, showOnlyIntersecting, suppliers]);
 
   if (comparisonData.length === 0) {
     return (
@@ -55,6 +70,16 @@ export function ComparisonTab({
           )}
         </div>
         <div className={styles.legend}>
+          <button
+            onClick={() => setShowOnlyIntersecting(!showOnlyIntersecting)}
+            className={`${styles.filterButton} ${showOnlyIntersecting ? styles.filterButtonActive : ''}`}
+            title={showOnlyIntersecting ? 'Показать все позиции' : 'Показать только пересекающиеся'}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+            </svg>
+            {showOnlyIntersecting ? 'Все позиции' : 'Только пересекающиеся'}
+          </button>
           <span className={styles.legendItem}>
             <span className={styles.legendColor}></span>
             Лучшая цена
