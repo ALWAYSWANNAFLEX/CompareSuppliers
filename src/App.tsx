@@ -9,6 +9,7 @@ import { SuppliersTab } from './components/SuppliersTab';
 import { ComparisonTab } from './components/ComparisonTab';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Notification } from './components/Notification';
+import { UploadZone } from './components/UploadZone';
 
 function App() {
   const {

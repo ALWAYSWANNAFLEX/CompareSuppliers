@@ -1,16 +1,8 @@
 import { useMemo } from 'react';
-import { Supplier } from '../types';
-import { parsePriceText, parseExcelFile, entriesToPlainText } from '../parser';
-import { UploadZone } from './UploadZone';
-
-interface SuppliersTabProps {
-  supplier: Supplier;
-  normalizedMap: Record<string, string>;
-  hasAnyNormalization: boolean;
-  onFileUpload: (file: File) => void;
-  onPriceTextChange: (text: string) => void;
-  onUploadMessage: (type: 'success' | 'error', text: string) => void;
-}
+import { SuppliersTabProps } from './SuppliersTab.types';
+import { parsePriceText, parseExcelFile, entriesToPlainText } from '../../parser';
+import { UploadZone } from '../UploadZone';
+import styles from './SuppliersTab.module.css';
 
 export function SuppliersTab({
   supplier,
@@ -57,42 +49,39 @@ export function SuppliersTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto custom-scrollbar">
-      <div className="space-y-5">
-        {/* Upload zone */}
+    <div className={styles.container}>
+      <div className={styles.content}>
         <UploadZone supplierName={supplier.name} onFileUpload={handleFileUpload} />
 
-        {/* Text input */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-            <h3 className="font-semibold text-gray-800 text-sm">Или вставьте прайс текстом</h3>
-            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{entries.length} позиций</span>
+        <div className={styles.card}>
+          <div className={styles.cardHeader}>
+            <h3 className={styles.cardTitle}>Или вставьте прайс текстом</h3>
+            <span className={styles.badge}>{entries.length} позиций</span>
           </div>
           <textarea
             value={supplier.priceText}
             onChange={(e) => onPriceTextChange(e.target.value)}
             placeholder={"Вставьте прайс в любом формате:\n\nSamsung-A17-4/128-Gray  14500\nSamsung A17 4/128 серый — 14500\nSM-A175F 4+128 Black  14500"}
-            className="w-full h-40 px-5 py-4 text-sm font-mono text-gray-800 resize-none focus:outline-none placeholder:text-gray-400"
+            className={styles.textarea}
           />
         </div>
 
-        {/* Parsed preview */}
         {entries.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="font-semibold text-gray-800 text-sm">Распознанные позиции</h3>
-              <span className="text-xs text-gray-500">{entries.length} позиций</span>
+          <div className={styles.card}>
+            <div className={styles.cardHeader}>
+              <h3 className={styles.cardTitle}>Распознанные позиции</h3>
+              <span className={styles.badge}>{entries.length} позиций</span>
             </div>
-            <div className="max-h-64 overflow-y-auto custom-scrollbar">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 sticky top-0">
+            <div className={styles.tableWrapper}>
+              <table className={styles.table}>
+                <thead className={styles.tableHead}>
                   <tr>
-                    <th className="text-left px-5 py-2 text-gray-600 font-medium w-12">№</th>
-                    <th className="text-left px-5 py-2 text-gray-600 font-medium">Оригинал</th>
+                    <th className={`${styles.tableHeadCell} ${styles.tableHeadCellSmall}`}>№</th>
+                    <th className={styles.tableHeadCell}>Оригинал</th>
                     {hasAnyNormalization && (
-                      <th className="text-left px-5 py-2 text-purple-600 font-medium">→ Стандарт</th>
+                      <th className={styles.tableHeadCell}>→ Стандарт</th>
                     )}
-                    <th className="text-right px-5 py-2 text-gray-600 font-medium w-32">Цена</th>
+                    <th className={`${styles.tableHeadCell} ${styles.tableHeadCellRight} ${styles.tableHeadCellPrice}`}>Цена</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -100,15 +89,15 @@ export function SuppliersTab({
                     const normalized = normalizedMap[entry.productName];
                     const hasNorm = normalized && normalized.toLowerCase().trim() !== entry.productName.toLowerCase().trim();
                     return (
-                      <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
-                        <td className="px-5 py-2 text-gray-400 text-xs">{idx + 1}</td>
-                        <td className="px-5 py-2 text-gray-800">{entry.productName}</td>
+                      <tr key={idx} className={styles.tableRow}>
+                        <td className={`${styles.tableCell} ${styles.tableCellIndex}`}>{idx + 1}</td>
+                        <td className={styles.tableCell}>{entry.productName}</td>
                         {hasAnyNormalization && (
-                          <td className={`px-5 py-2 text-xs ${hasNorm ? 'text-purple-700 font-medium' : 'text-gray-400'}`}>
+                          <td className={hasNorm ? styles.tableCellNormalized : styles.tableCellNormalizedEmpty}>
                             {hasNorm ? normalized : '—'}
                           </td>
                         )}
-                        <td className="px-5 py-2 text-right font-medium text-gray-800">
+                        <td className={`${styles.tableCell} ${styles.tableCellPrice}`}>
                           {entry.price !== null ? entry.price.toLocaleString('ru-RU') + ' ₽' : '—'}
                         </td>
                       </tr>
