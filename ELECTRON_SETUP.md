@@ -1,26 +1,18 @@
-# Инструкции по настройке Electron
+# Настройка Electron
 
 ## Что уже сделано:
-
-✅ Установлены зависимости:
-- electron
-- electron-builder
-- vite-plugin-electron
-- vite-plugin-electron-renderer
-- electron-squirrel-startup
-
+✅ Установлены зависимости: `electron`, `electron-builder`, `vite-plugin-electron`, `vite-plugin-electron-renderer`
 ✅ Созданы файлы:
-- `electron/main.ts` - главный процесс
+- `electron/main.ts` - главный процесс Electron
 - `electron/preload.ts` - preload скрипт
-- `vite.config.js` - обновлён для поддержки Electron
-
-✅ Проект успешно собирается
+- `electron-builder.json` - конфигурация сборки
+- `vite.electron.config.ts` - конфигурация Vite для Electron
 
 ## Что нужно сделать вручную:
 
-### 1. Обновите package.json
+### 1. Обновите `package.json`
 
-Откройте `package.json` и добавьте/обновите следующие поля:
+Добавьте следующие поля и скрипты:
 
 ```json
 {
@@ -30,88 +22,83 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc && vite build",
     "preview": "vite preview",
-    "electron:dev": "vite",
-    "electron:build": "vite build && electron-builder",
-    "electron:pack": "electron-builder --dir",
-    "electron:preview": "vite build && electron ."
-  },
-  "build": {
-    "appId": "com.yourcompany.pricecomparison",
-    "productName": "Сравнение прайсов",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "package.json"
-    ],
-    "mac": {
-      "category": "public.app-category.business",
-      "target": ["dmg", "zip"]
-    },
-    "win": {
-      "target": ["nsis", "portable"]
-    },
-    "linux": {
-      "target": ["AppImage", "deb"]
-    }
+    "electron:dev": "vite --config vite.electron.config.ts",
+    "electron:build": "vite build --config vite.electron.config.ts && electron-builder",
+    "electron:preview": "vite build --config vite.electron.config.ts && electron ."
   }
 }
 ```
 
-### 2. Запуск в режиме разработки
+### 2. Установите дополнительную зависимость (опционально)
 
 ```bash
-npm run dev
+npm install --save-dev electron-squirrel-startup
 ```
 
-Это запустит Vite dev server и автоматически откроет Electron окно.
+Эта зависимость нужна для корректной работы ярлыков на Windows.
 
-### 3. Сборка приложения
+## Запуск
 
+### Режим разработки:
 ```bash
-npm run build
+npm run electron:dev
 ```
 
-### 4. Запуск собранного приложения
+Это запустит Vite dev server и откроет Electron окно с hot-reload.
 
-```bash
-npx electron .
-```
-
-### 5. Создание установщика
-
+### Сборка приложения:
 ```bash
 npm run electron:build
 ```
 
-Готовые установщики появятся в папке `release/`.
+Готовые установщики появятся в папке `release/`:
+- **Windows**: `.exe` (NSIS installer) и portable версия
+- **macOS**: `.dmg` и `.zip`
+- **Linux**: `.AppImage` и `.deb`
 
-## Альтернатива: Tauri (рекомендую для меньшего размера)
-
-Если вам нужно более легковесное приложение (~5MB вместо ~150MB), рассмотрите Tauri:
-
+### Предпросмотр сборки:
 ```bash
-npm install --save-dev @tauri-apps/cli @tauri-apps/api
-npx tauri init
-npm run tauri dev
-npm run tauri build
+npm run electron:preview
 ```
+
+## Структура проекта
+
+```
+your-project/
+├── electron/
+│   ├── main.ts          # Главный процесс Electron
+│   └── preload.ts       # Preload скрипт
+├── src/                 # Ваш React код
+├── dist/                # Собранный React код
+├── dist-electron/       # Собранный Electron код
+├── release/             # Готовые установщики
+├── electron-builder.json
+├── vite.electron.config.ts
+└── package.json
+```
+
+## Настройка electron-builder.json
+
+Вы можете настроить:
+- `appId` - уникальный идентификатор приложения
+- `productName` - название приложения
+- Целевые платформы (mac, win, linux)
+- Форматы установщиков
 
 ## Дополнительные возможности
 
 ### Сохранение файлов через Electron API
 
-Если хотите добавить нативное сохранение файлов, обновите `electron/main.ts`:
+Если хотите добавить нативное сохранение файлов:
 
+1. В `electron/main.ts` добавьте:
 ```typescript
 import { ipcMain, dialog } from 'electron';
 import fs from 'fs';
 
-ipcMain.handle('save-file', async (event,  string) => {
+ipcMain.handle('save-file', async (event, data: string) => {
   const result = await dialog.showSaveDialog({
     filters: [{ name: 'CSV Files', extensions: ['csv'] }],
   });
@@ -124,36 +111,14 @@ ipcMain.handle('save-file', async (event,  string) => {
 });
 ```
 
-Обновите `electron/preload.ts`:
-
+2. В `electron/preload.ts` добавьте:
 ```typescript
-import { contextBridge, ipcRenderer } from 'electron';
-
 contextBridge.exposeInMainWorld('electronAPI', {
-  platform: process.platform,
-  isElectron: true,
   saveFile: (data: string) => ipcRenderer.invoke('save-file', data),
 });
 ```
 
-Добавьте типы в `src/vite-env.d.ts`:
-
-```typescript
-export {};
-
-declare global {
-  interface Window {
-    electronAPI: {
-      platform: string;
-      isElectron: boolean;
-      saveFile: (data: string) => Promise<{ success: boolean }>;
-    };
-  }
-}
-```
-
-Используйте в `src/App.tsx`:
-
+3. В `src/App.tsx` используйте:
 ```typescript
 const handleExportCSV = useCallback(async () => {
   const csv = exportToCSV(comparisonData, suppliers);
@@ -173,18 +138,28 @@ const handleExportCSV = useCallback(async () => {
 }, [comparisonData, suppliers]);
 ```
 
+## Альтернатива: Tauri
+
+Если хотите более легковесное решение (~5MB vs ~150MB), рассмотрите Tauri:
+
+```bash
+npm install --save-dev @tauri-apps/cli @tauri-apps/api
+npx tauri init
+npm run tauri dev
+npm run tauri build
+```
+
 ## Troubleshooting
 
-### Ошибка: Cannot find module 'electron'
+### Ошибка: "Cannot find module 'electron'"
 ```bash
 npm install
 ```
 
-### Приложение не запускается после сборки
-Убедитесь, что в `package.json` указан правильный `main`:
-```json
-"main": "dist-electron/main.js"
-```
+### Electron не запускается
+Убедитесь, что вы добавили `"main": "dist-electron/main.js"` в `package.json`
 
-### Hot reload не работает
-Проверьте, что `VITE_DEV_SERVER_URL` передаётся в `main.ts`.
+### Белый экран в Electron
+Проверьте пути в `electron/main.ts`:
+- В dev режиме: `mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)`
+- В production: `mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))`
