@@ -117,9 +117,11 @@ export async function getCacheSize(): Promise<number> {
 // ============================================================
 
 const SYSTEM_PROMPT = `Ты — эксперт по стандартизации названий товаров (электроника, смартфоны, планшеты).
-Твоя задача — привести название товара к единому стандартному формату. Лучше всего опираться на официальные источники.
+Твоя задача — привести КАЖДОЕ название товара к единому стандартному формату.
 
-Формат вывода:
+ВАЖНО: Ты ДОЛЖЕН стандартизировать КАЖДОЕ название. Не оставляй оригинальные названия без изменений. Даже если название кажется правильным, приведи его к точному формату ниже.
+
+Формат вывода (СТРОГО):
 [Бренд] [Модель] [ОЗУ]/[Встроенная память] [Цвет]
 
 Правила:
@@ -131,9 +133,9 @@ const SYSTEM_PROMPT = `Ты — эксперт по стандартизации
 6. Разделитель: пробел между блоками, слэш только между ОЗУ и памятью.
 7. Убери мусор: внутренние артикулы (SM-A175F, M2101K7AI и т.п.), слова "новый", "оригинал", "global version" и т.п.
 
-
-Примеры:
+Примеры (ОБЯЗАТЕЛЬНО стандартизируй ВСЕ):
 - "Samsung-A17-4/128-Gray" → "Samsung Galaxy A17 4/128 Gray"
+- "SAMSUNG A17 4+128GB BLACK AE" → "Samsung Galaxy A17 4/128 Black"
 - "Самсунг А 17 4+128 серый" → "Samsung Galaxy A17 4/128 Gray"
 - "SM-A175F/DS 4+128 Black" → "Samsung Galaxy A17 4/128 Black"
 - "IPHONE 15 PRO MAX 256GB NATURAL TITANIUM" → "Apple iPhone 15 Pro Max 8/256 Natural Titanium"
@@ -233,8 +235,8 @@ async function normalizeBatch(
   names: string[],
   signal?: AbortSignal,
 ): Promise<string[]> {
-  const numbered = names.map((n, i) => `${i + 1}. ${n}`).join("\n");
-  const userMessage = `Нормализуй следующие названия товаров. Верни ТОЛЬКО JSON массив нормализованных названий в том же порядке, без пояснений. Пример ответа: ["Samsung Galaxy A17 4/128 Gray", "Google Pixel 11 Pro XL 12/256 Fog CA"]\n\nНазвания:\n${numbered}`;
+  const numbered = names.map((n, i) => `${i + 1}. ${n}`).join('\n');
+  const userMessage = `Нормализуй следующие названия товаров. Верни ТОЛЬКО JSON массив нормализованных названий в том же порядке, без пояснений. Пример ответа: ["Samsung Galaxy A17 4/128 Gray", "Google Pixel 11 Pro XL 12/256 Fog"]\n\nНазвания:\n${numbered}`;
 
   const content = await callNordRouter(
     apiKey,
