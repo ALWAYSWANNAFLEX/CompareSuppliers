@@ -22,11 +22,14 @@ export function ComparisonTab({
       result = result.filter(item => item.productName.toLowerCase().includes(query));
     }
     
-    // Фильтр только пересекающихся позиций (есть у всех поставщиков)
+    // Фильтр только пересекающихся позиций (есть хотя бы у 2 поставщиков)
     if (showOnlyIntersecting) {
       result = result.filter(item => {
-        const prices = suppliers.map(s => item.prices[s.id]);
-        return prices.every(price => price !== null && price !== undefined);
+        const pricesWithValues = suppliers.filter(s => {
+          const price = item.prices[s.id];
+          return price !== null && price !== undefined;
+        });
+        return pricesWithValues.length >= 2;
       });
     }
     
