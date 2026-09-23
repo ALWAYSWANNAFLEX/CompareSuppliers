@@ -29,8 +29,14 @@ export default defineConfig({
     ]),
     renderer(),
   ],
-  base: './', // Относительные пути для Electron
+  base: './',
+  css: {
+    modules: {
+      localsConvention: 'camelCase',
+    },
+  },
   build: {
     outDir: 'dist',
+    assetsDir: 'assets',
   },
 });
